@@ -1004,6 +1004,8 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
 
     if not clean_email:
         raise HTTPException(status_code=400, detail="Email address is required.")
+    if not EMAIL_REGEX.match(clean_email):
+        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
     if not raw_password:
         raise HTTPException(status_code=400, detail="Password is required.")
 
@@ -1085,6 +1087,7 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
 
     return {
         "status": "success",
+        "token": token,
         "user": {
             "id": user_dict["id"],
             "name": user_dict["name"],

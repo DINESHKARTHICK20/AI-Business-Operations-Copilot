@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Bot, Users, TrendingUp, Package, FileText,
   UserCheck, BarChart3, Settings, LogOut, Bell, Search, ChevronDown,
   ArrowUpRight, ArrowDownRight, Plus, Send, Mic, Paperclip, Star,
-  Download, Eye, Edit2, Trash2, Filter, Calendar, RefreshCw,
+  Download, Eye, EyeOff, Edit2, Trash2, Filter, Calendar, RefreshCw,
   ShoppingCart, DollarSign, Activity, AlertTriangle, CheckCircle,
   Clock, Mail, Phone, MapPin, Shield, Key, CreditCard, Zap,
   BarChart2, PieChart, Map, Upload, X, ChevronRight, ChevronLeft,
@@ -653,16 +653,48 @@ function LandingPage({ setPage }: { setPage: (p: Page) => void }) {
 
 // ─── Login Page ───────────────────────────────────────────────────────────────
 
-function LoginPage({ setPage, onLoginSuccess, initialNotice }: { setPage: (p: Page) => void; onLoginSuccess: (u: UserSession) => void; initialNotice?: string | null }) {
-  const [email, setEmail] = useState("");
+function LoginPage({
+  setPage,
+  onLoginSuccess,
+  initialNotice,
+  initialEmail = "",
+}: {
+  setPage: (p: Page) => void;
+  onLoginSuccess: (u: UserSession) => void;
+  initialNotice?: string | null;
+  initialEmail?: string;
+}) {
+  const [email, setEmail] = useState(() => {
+    try {
+      return initialEmail || localStorage.getItem("bizops_remembered_email") || "";
+    } catch {
+      return initialEmail || "";
+    }
+  });
   const [pass, setPass] = useState("");
-  const [remember, setRemember] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [remember, setRemember] = useState(() => {
+    try {
+      return !!localStorage.getItem("bizops_remembered_email");
+    } catch {
+      return false;
+    }
+  });
   const [loading, setLoading] = useState(false);
   const [checkingServer, setCheckingServer] = useState(false);
   const [serverStatus, setServerStatus] = useState<"checking" | "online" | "offline">("checking");
   const [isConnectionError, setIsConnectionError] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(initialNotice || null);
+
+  useEffect(() => {
+    if (initialNotice) {
+      setSuccessMsg(initialNotice);
+    }
+    if (initialEmail) {
+      setEmail(initialEmail);
+    }
+  }, [initialNotice, initialEmail]);
 
   const checkServerStatus = async () => {
     setCheckingServer(true);
@@ -688,14 +720,26 @@ function LoginPage({ setPage, onLoginSuccess, initialNotice }: { setPage: (p: Pa
     checkServerStatus();
   }, []);
 
-  const handleLogin = async (e?: React.FormEvent, customEmail?: string, customPass?: string) => {
+  const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    const cleanEmail = (customEmail ?? email).trim().toLowerCase();
-    const loginPassword = customPass ?? pass;
-    if (!cleanEmail || !loginPassword) {
-      setErrorMsg("Please enter both email and password.");
+    const cleanEmail = email.trim().toLowerCase();
+    const loginPassword = pass;
+
+    // Real email format validation
+    const emailRegex = /^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$/;
+    if (!cleanEmail) {
+      setErrorMsg("Please enter your email address.");
       return;
     }
+    if (!emailRegex.test(cleanEmail)) {
+      setErrorMsg("Please enter a valid email address (e.g. name@company.com).");
+      return;
+    }
+    if (!loginPassword) {
+      setErrorMsg("Please enter your password.");
+      return;
+    }
+
     setLoading(true);
     setErrorMsg(null);
     setIsConnectionError(false);
@@ -704,6 +748,15 @@ function LoginPage({ setPage, onLoginSuccess, initialNotice }: { setPage: (p: Pa
       const user = res?.user || (res?.email ? { id: res.id, name: res.name, email: res.email, company: res.company, biz_type: res.biz_type } : null);
       if (user) {
         setServerStatus("online");
+        if (remember) {
+          try {
+            localStorage.setItem("bizops_remembered_email", cleanEmail);
+          } catch {}
+        } else {
+          try {
+            localStorage.removeItem("bizops_remembered_email");
+          } catch {}
+        }
         onLoginSuccess(user);
         return;
       } else {
@@ -722,36 +775,13 @@ function LoginPage({ setPage, onLoginSuccess, initialNotice }: { setPage: (p: Pa
       ) {
         setServerStatus("offline");
         setIsConnectionError(true);
-        setErrorMsg("Unable to connect to the backend server. Please verify the server is running, or explore in Demo Mode.");
+        setErrorMsg("Unable to connect to the backend server. Please verify the FastAPI backend is running on http://127.0.0.1:8000 and try again.");
       } else {
         setIsConnectionError(false);
-        setErrorMsg(msg || "Failed to sign in. Please check your credentials or connection.");
+        setErrorMsg(msg || "Failed to sign in. Please verify your credentials.");
       }
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleDemoLogin = () => {
-    const demoUser: UserSession = {
-      id: 1,
-      name: "Dinesh",
-      email: "dinesh@test.com",
-      company: "Dinesh Tech Solutions",
-      biz_type: "SaaS",
-    };
-    onLoginSuccess(demoUser);
-  };
-
-  const fillAndLoginDemo = async () => {
-    setEmail("dinesh@test.com");
-    setPass("password123");
-    setErrorMsg(null);
-    setIsConnectionError(false);
-    if (serverStatus === "offline") {
-      handleDemoLogin();
-    } else {
-      await handleLogin(undefined, "dinesh@test.com", "password123");
     }
   };
 
@@ -770,7 +800,7 @@ function LoginPage({ setPage, onLoginSuccess, initialNotice }: { setPage: (p: Pa
             <span className="text-white font-bold text-xl tracking-tight">AI BizOps</span>
           </div>
           <h1 className="text-2xl font-bold text-white mb-2">Welcome back</h1>
-          <p className="text-slate-400 text-sm">Sign in to your account</p>
+          <p className="text-slate-400 text-sm">Sign in with your email and password</p>
         </div>
 
         <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-8 shadow-2xl">
@@ -806,53 +836,10 @@ function LoginPage({ setPage, onLoginSuccess, initialNotice }: { setPage: (p: Pa
                     <RefreshCw size={12} className={checkingServer || loading ? "animate-spin" : ""} />
                     Retry Connection
                   </button>
-                  <button
-                    type="button"
-                    onClick={handleDemoLogin}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-semibold shadow transition-colors"
-                  >
-                    <Sparkles size={12} />
-                    Continue in Demo Mode
-                  </button>
                 </div>
               )}
             </div>
           )}
-
-          {/* Quick Demo Login Pill */}
-          <div className="mb-5 p-3 rounded-xl bg-indigo-950/40 border border-indigo-500/20 flex items-center justify-between gap-3 text-xs">
-            <div className="min-w-0">
-              <span className="text-indigo-300 font-semibold block">Demo Account</span>
-              <span className="text-slate-400 truncate block text-[11px]">dinesh@test.com / password123</span>
-            </div>
-            <button
-              type="button"
-              onClick={fillAndLoginDemo}
-              disabled={loading}
-              className="shrink-0 px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-400/30 text-xs font-medium transition-colors"
-            >
-              1-Click Sign In
-            </button>
-          </div>
-
-          <button
-            onClick={() => setErrorMsg("Google Sign-In is not configured. Please sign in with your email and password.")}
-            className="w-full flex items-center justify-center gap-3 py-3 rounded-xl border border-white/10 text-slate-200 text-sm font-medium hover:bg-white/10 transition-colors mb-4"
-          >
-            <svg width="18" height="18" viewBox="0 0 48 48">
-              <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34.5 6.5 29.5 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.6-.4-3.9z" />
-              <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.5 15.8 18.9 12 24 12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34.5 6.5 29.5 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
-              <path fill="#4CAF50" d="M24 44c5.2 0 9.9-1.9 13.5-5.1l-6.2-5.3C29.4 35.4 26.8 36 24 36c-5.2 0-9.7-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z" />
-              <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4.1 5.6l6.2 5.3C37 39 44 34 44 24c0-1.3-.1-2.6-.4-3.9z" />
-            </svg>
-            Continue with Google
-          </button>
-
-          <div className="flex items-center gap-3 mb-5">
-            <div className="flex-1 h-px bg-white/10" />
-            <span className="text-slate-500 text-xs">or sign in with email</span>
-            <div className="flex-1 h-px bg-white/10" />
-          </div>
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
@@ -860,23 +847,42 @@ function LoginPage({ setPage, onLoginSuccess, initialNotice }: { setPage: (p: Pa
               <input
                 value={email}
                 onChange={e => { setEmail(e.target.value); setErrorMsg(null); setSuccessMsg(null); setIsConnectionError(false); }}
-                type="text"
-                placeholder="Enter your email"
+                type="email"
+                autoComplete="email"
+                placeholder="you@company.com"
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
               />
             </div>
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-xs font-medium text-slate-300">Password <span className="text-red-400">*</span></label>
-                <a href="#" className="text-xs text-indigo-400 hover:text-indigo-300">Forgot password?</a>
+                <a
+                  href="#"
+                  onClick={(e) => { e.preventDefault(); setErrorMsg("Please contact your administrator to reset your account password."); }}
+                  className="text-xs text-indigo-400 hover:text-indigo-300"
+                >
+                  Forgot password?
+                </a>
               </div>
-              <input
-                value={pass}
-                onChange={e => { setPass(e.target.value); setErrorMsg(null); setIsConnectionError(false); }}
-                type="password"
-                placeholder="Enter your password"
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
-              />
+              <div className="relative">
+                <input
+                  value={pass}
+                  onChange={e => { setPass(e.target.value); setErrorMsg(null); setIsConnectionError(false); }}
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="current-password"
+                  placeholder="Enter your password"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl pl-4 pr-10 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors"
+                  tabIndex={-1}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <input
@@ -886,7 +892,7 @@ function LoginPage({ setPage, onLoginSuccess, initialNotice }: { setPage: (p: Pa
                 onChange={e => setRemember(e.target.checked)}
                 className="w-4 h-4 rounded border-white/20 accent-indigo-500"
               />
-              <label htmlFor="remember" className="text-sm text-slate-400">Remember me for 30 days</label>
+              <label htmlFor="remember" className="text-sm text-slate-400">Remember my email</label>
             </div>
 
             <button
@@ -914,13 +920,21 @@ function LoginPage({ setPage, onLoginSuccess, initialNotice }: { setPage: (p: Pa
 
 // ─── Signup Page ──────────────────────────────────────────────────────────────
 
-function SignUpPage({ setPage }: { setPage: (p: Page) => void }) {
+function SignUpPage({
+  setPage,
+  onRegistered,
+}: {
+  setPage: (p: Page) => void;
+  onRegistered?: (email: string) => void;
+}) {
   const [fullName, setFullName] = useState("");
   const [company, setCompany] = useState("");
   const [bizType, setBizType] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [agreed, setAgreed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -942,9 +956,9 @@ function SignUpPage({ setPage }: { setPage: (p: Page) => void }) {
       return;
     }
 
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const emailRegex = /^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$/;
     if (!emailRegex.test(cleanEmail)) {
-      setErrorMsg("Please enter a valid email address.");
+      setErrorMsg("Please enter a valid email address (e.g. you@company.com).");
       return;
     }
 
@@ -973,9 +987,13 @@ function SignUpPage({ setPage }: { setPage: (p: Page) => void }) {
         biz_type: cleanBiz,
       });
       if (res?.status === "success" || res?.user) {
-        setSuccessMsg("Account created successfully. Please sign in.");
+        setSuccessMsg("Account created successfully! Redirecting to sign in...");
         setTimeout(() => {
-          setPage("login");
+          if (onRegistered) {
+            onRegistered(cleanEmail);
+          } else {
+            setPage("login");
+          }
         }, 1200);
       } else {
         setErrorMsg("Failed to create account. Please try again.");
@@ -983,9 +1001,9 @@ function SignUpPage({ setPage }: { setPage: (p: Page) => void }) {
     } catch (err: any) {
       const msg = err?.message || "";
       if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || err.name === "TypeError" || msg.includes("Unable to connect") || msg.includes("unreachable")) {
-        setErrorMsg("Unable to connect to the backend server. Please verify the server is running.");
+        setErrorMsg("Unable to connect to the backend server. Please verify the FastAPI backend is running on http://127.0.0.1:8000.");
       } else if (msg.includes("already exists")) {
-        setErrorMsg("An account with this email already exists.");
+        setErrorMsg("An account with this email already exists. Please sign in.");
       } else {
         setErrorMsg(msg || "Registration failed. Please try again.");
       }
@@ -1011,7 +1029,7 @@ function SignUpPage({ setPage }: { setPage: (p: Page) => void }) {
           <h1 className="text-2xl font-bold text-white mb-2">Create your account</h1>
           <p className="text-slate-400 text-sm">Start automating your operations in minutes</p>
         </div>
-        <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-8">
+        <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-8 shadow-2xl">
           {successMsg && (
             <div className="mb-5 px-4 py-3 bg-emerald-500/15 border border-emerald-500/30 rounded-xl flex items-center gap-2.5 text-emerald-300 text-xs">
               <CheckCircle size={15} className="text-emerald-400 shrink-0" />
@@ -1026,40 +1044,27 @@ function SignUpPage({ setPage }: { setPage: (p: Page) => void }) {
             </div>
           )}
 
-          <button
-            onClick={() => setErrorMsg("Google Sign-In is not configured. Please register with your email and password.")}
-            className="w-full flex items-center justify-center gap-3 py-3 rounded-xl border border-white/10 text-slate-200 text-sm font-medium hover:bg-white/10 transition-colors mb-5"
-          >
-            <svg width="18" height="18" viewBox="0 0 48 48">
-              <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34.5 6.5 29.5 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.6-.4-3.9z" />
-              <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.5 15.8 18.9 12 24 12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34.5 6.5 29.5 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
-              <path fill="#4CAF50" d="M24 44c5.2 0 9.9-1.9 13.5-5.1l-6.2-5.3C29.4 35.4 26.8 36 24 36c-5.2 0-9.7-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z" />
-              <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4.1 5.6l6.2 5.3C37 39 44 34 44 24c0-1.3-.1-2.6-.4-3.9z" />
-            </svg>
-            Continue with Google
-          </button>
-
-          <div className="flex items-center gap-3 mb-5">
-            <div className="flex-1 h-px bg-white/10" />
-            <span className="text-slate-500 text-xs">or fill in your details</span>
-            <div className="flex-1 h-px bg-white/10" />
-          </div>
-
           <form onSubmit={handleRegister} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1.5">Full Name <span className="text-red-400">*</span></label>
                 <input
-                  value={fullName} onChange={e => { setFullName(e.target.value); setErrorMsg(null); }}
-                  type="text" placeholder="Enter your full name"
+                  value={fullName}
+                  onChange={e => { setFullName(e.target.value); setErrorMsg(null); }}
+                  type="text"
+                  placeholder="Enter your full name"
+                  autoComplete="name"
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
                 />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1.5">Company Name <span className="text-red-400">*</span></label>
                 <input
-                  value={company} onChange={e => { setCompany(e.target.value); setErrorMsg(null); }}
-                  type="text" placeholder="Your company name"
+                  value={company}
+                  onChange={e => { setCompany(e.target.value); setErrorMsg(null); }}
+                  type="text"
+                  placeholder="Your company name"
+                  autoComplete="organization"
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
                 />
               </div>
@@ -1067,8 +1072,9 @@ function SignUpPage({ setPage }: { setPage: (p: Page) => void }) {
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1.5">Business Type <span className="text-red-400">*</span></label>
               <select
-                value={bizType} onChange={e => { setBizType(e.target.value); setErrorMsg(null); }}
-                className="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30 appearance-none"
+                value={bizType}
+                onChange={e => { setBizType(e.target.value); setErrorMsg(null); }}
+                className="w-full bg-slate-850 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30 appearance-none bg-slate-800"
                 style={{ color: bizType ? "#fff" : "#64748b" }}
               >
                 {businessTypes.map(t => (
@@ -1081,27 +1087,58 @@ function SignUpPage({ setPage }: { setPage: (p: Page) => void }) {
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1.5">Work Email <span className="text-red-400">*</span></label>
               <input
-                value={email} onChange={e => { setEmail(e.target.value); setErrorMsg(null); }}
-                type="email" placeholder="you@company.com"
+                value={email}
+                onChange={e => { setEmail(e.target.value); setErrorMsg(null); }}
+                type="email"
+                autoComplete="email"
+                placeholder="you@company.com"
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1.5">Password <span className="text-red-400">*</span></label>
-                <input
-                  value={password} onChange={e => { setPassword(e.target.value); setErrorMsg(null); }}
-                  type="password" placeholder="Min. 6 characters"
-                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
-                />
+                <div className="relative">
+                  <input
+                    value={password}
+                    onChange={e => { setPassword(e.target.value); setErrorMsg(null); }}
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="new-password"
+                    placeholder="Min. 6 characters"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl pl-4 pr-10 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors"
+                    tabIndex={-1}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1.5">Confirm Password <span className="text-red-400">*</span></label>
-                <input
-                  value={confirm} onChange={e => { setConfirm(e.target.value); setErrorMsg(null); }}
-                  type="password" placeholder="Repeat password"
-                  className={`w-full bg-white/5 border rounded-xl px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${confirm && confirm !== password ? "border-red-500/50" : "border-white/10 focus:border-indigo-500/30"}`}
-                />
+                <div className="relative">
+                  <input
+                    value={confirm}
+                    onChange={e => { setConfirm(e.target.value); setErrorMsg(null); }}
+                    type={showConfirm ? "text" : "password"}
+                    autoComplete="new-password"
+                    placeholder="Repeat password"
+                    className={`w-full bg-white/5 border rounded-xl pl-4 pr-10 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${confirm && confirm !== password ? "border-red-500/50" : "border-white/10 focus:border-indigo-500/30"}`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirm(!showConfirm)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors"
+                    tabIndex={-1}
+                    aria-label={showConfirm ? "Hide password" : "Show password"}
+                  >
+                    {showConfirm ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
                 {confirm && confirm !== password && (
                   <p className="text-xs text-red-400 mt-1">Passwords do not match</p>
                 )}
@@ -1109,7 +1146,10 @@ function SignUpPage({ setPage }: { setPage: (p: Page) => void }) {
             </div>
             <div className="flex items-start gap-2.5 pt-1">
               <input
-                type="checkbox" id="agree" checked={agreed} onChange={e => { setAgreed(e.target.checked); setErrorMsg(null); }}
+                type="checkbox"
+                id="agree"
+                checked={agreed}
+                onChange={e => { setAgreed(e.target.checked); setErrorMsg(null); }}
                 className="w-4 h-4 mt-0.5 rounded border-white/20 accent-indigo-500 shrink-0"
               />
               <label htmlFor="agree" className="text-xs text-slate-400 leading-relaxed">
@@ -4991,6 +5031,8 @@ function DesignSystemPage() {
 export default function App() {
   const [currentUser, setCurrentUser] = useState<UserSession | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
+  const [loginNotice, setLoginNotice] = useState<string | null>(null);
+  const [loginEmail, setLoginEmail] = useState<string>("");
   const [page, setPage] = useState<Page>(() => {
     try {
       const savedPage = localStorage.getItem("bizops_active_page") as Page;
@@ -5001,20 +5043,23 @@ export default function App() {
     return "landing";
   });
 
-  // Verify backend session on mount via HttpOnly cookie
+  // Verify backend session on mount via HttpOnly cookie and/or Bearer header
   useEffect(() => {
     let isMounted = true;
     api.getCurrentUser()
       .then(res => {
         if (!isMounted) return;
-        if (res?.user) {
-          setCurrentUser(res.user);
+        const validUser = res?.user || (res?.email ? { id: res.id, name: res.name, email: res.email, company: res.company, biz_type: res.biz_type } : null);
+        if (validUser) {
+          setCurrentUser(validUser);
           const savedPage = localStorage.getItem("bizops_active_page") as Page;
           if (savedPage && !["landing", "login", "signup"].includes(savedPage)) {
             setPage(savedPage);
           } else {
             setPage("dashboard");
           }
+        } else {
+          setCurrentUser(null);
         }
       })
       .catch(() => {
@@ -5041,8 +5086,10 @@ export default function App() {
 
   const handleLoginSuccess = (user: UserSession) => {
     setCurrentUser(user);
+    setLoginNotice(null);
     try {
       localStorage.setItem("bizops_active_page", "dashboard");
+      localStorage.setItem("bizops_user", JSON.stringify(user));
     } catch { }
     setPage("dashboard");
   };
@@ -5052,8 +5099,10 @@ export default function App() {
       await api.logoutUser().catch(() => { });
     } catch { }
     setCurrentUser(null);
+    setLoginNotice("You have been signed out successfully.");
     try {
       localStorage.removeItem("bizops_active_page");
+      localStorage.removeItem("bizops_user");
     } catch { }
     setPage("login");
   };
@@ -5082,7 +5131,12 @@ export default function App() {
     return (
       <>
         <GradientDefs />
-        <LoginPage setPage={handlePageChange} onLoginSuccess={handleLoginSuccess} />
+        <LoginPage
+          setPage={handlePageChange}
+          onLoginSuccess={handleLoginSuccess}
+          initialNotice="Please sign in to access your dashboard."
+          initialEmail={loginEmail}
+        />
       </>
     );
   }
@@ -5092,8 +5146,24 @@ export default function App() {
       <>
         <GradientDefs />
         {page === "landing" && <LandingPage setPage={handlePageChange} />}
-        {page === "login" && <LoginPage setPage={handlePageChange} onLoginSuccess={handleLoginSuccess} />}
-        {page === "signup" && <SignUpPage setPage={handlePageChange} />}
+        {page === "login" && (
+          <LoginPage
+            setPage={handlePageChange}
+            onLoginSuccess={handleLoginSuccess}
+            initialNotice={loginNotice}
+            initialEmail={loginEmail}
+          />
+        )}
+        {page === "signup" && (
+          <SignUpPage
+            setPage={handlePageChange}
+            onRegistered={(newEmail) => {
+              setLoginEmail(newEmail);
+              setLoginNotice("Account created successfully! Please sign in with your password.");
+              handlePageChange("login");
+            }}
+          />
+        )}
       </>
     );
   }

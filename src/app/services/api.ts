@@ -300,10 +300,12 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   const primaryUrl = `${baseUrl}${endpoint}`;
   const method = (options.method || "GET").toUpperCase();
   const csrfToken = getCookie("csrf_token");
+  const storedToken = typeof localStorage !== "undefined" ? localStorage.getItem("bizops_session_token") : null;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(csrfToken && ["POST", "PUT", "PATCH", "DELETE"].includes(method) ? { "X-CSRF-Token": csrfToken } : {}),
+    ...(storedToken && !((options.headers as Record<string, string>)?.["Authorization"]) ? { "Authorization": `Bearer ${storedToken}` } : {}),
     ...((options.headers as Record<string, string>) || {}),
   };
 
@@ -595,10 +597,16 @@ export const api = {
   },
 
   async loginUser(data: { email: string; password?: string }): Promise<AuthResponse> {
-    return request<AuthResponse>("/api/auth/login", {
+    const res = await request<AuthResponse>("/api/auth/login", {
       method: "POST",
       body: JSON.stringify(data),
     });
+    if (res?.token && typeof localStorage !== "undefined") {
+      try {
+        localStorage.setItem("bizops_session_token", res.token);
+      } catch {}
+    }
+    return res;
   },
 
   async login(data: { email: string; password?: string }): Promise<AuthResponse> {
@@ -606,7 +614,16 @@ export const api = {
   },
 
   async getCurrentUser(): Promise<AuthResponse> {
-    return request<AuthResponse>("/api/auth/me");
+    try {
+      return await request<AuthResponse>("/api/auth/me");
+    } catch (err: any) {
+      if (typeof localStorage !== "undefined" && err?.message?.includes("401")) {
+        try {
+          localStorage.removeItem("bizops_session_token");
+        } catch {}
+      }
+      throw err;
+    }
   },
 
   async getMe(email?: string): Promise<AuthResponse> {
@@ -621,6 +638,12 @@ export const api = {
   },
 
   async logoutUser(): Promise<{ status: string; message?: string }> {
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.removeItem("bizops_session_token");
+        localStorage.removeItem("bizops_user");
+      }
+    } catch {}
     return request<{ status: string; message?: string }>("/api/auth/logout", {
       method: "POST",
     });
