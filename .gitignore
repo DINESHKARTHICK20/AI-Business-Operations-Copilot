@@ -1,0 +1,121 @@
+# ============================================================
+# Git Ignore - AI Business Operations Copilot
+# ============================================================
+
+# 1. Python Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# 2. Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 3. Node.js Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# 4. Frontend Build Outputs & Tooling Caches
+dist/
+dist-ssr/
+build/
+.vite/
+.eslintcache
+
+# 5. Environment Variables & Secrets (Preserve .env.example)
+.env
+.env.*
+.env.local
+.env.*.local
+!.env.example
+!.env.*.example
+
+# 6. Database Files & Backups (SQLite & Local Dumps)
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.sqlite-journal
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.bak
+*.dump
+*.sql.gz
+
+# 7. Python Test, Coverage & Linting Caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+
+# 8. IDE & Editor Files
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+# VS Code (preserve shared configuration, ignore user/workspace state)
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# 9. Operating System Artifacts
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# 10. Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 11. Temporary Files & Generated Caches
+*.tmp
+*.temp
+.cache/
+.temp/
+tmp/
+
+# 12. Sensitive Credentials, API Keys & Certificates
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+*service[-_]account*.json
+credentials.json
+client_secret*.json
+id_rsa*
+id_ed25519*
+
+# 13. Generated Machine Learning Models (auto-trained by backend on startup)
+*.pkl
+*.joblib
