@@ -1,9 +1,9 @@
 /**
  * Centralized API service for frontend -> backend communication
- * Connects React UI to FastAPI backend running on http://127.0.0.1:8000
+ * Connects React UI to FastAPI backend running on http://localhost:8000
  */
 
-export const DEFAULT_BACKEND_URL = "http://127.0.0.1:8000";
+export const DEFAULT_BACKEND_URL = "http://localhost:8000";
 
 export function getBaseApiUrl(): string {
   if (typeof window === "undefined") return DEFAULT_BACKEND_URL;
@@ -11,12 +11,10 @@ export function getBaseApiUrl(): string {
   if (typeof envUrl === "string" && envUrl.trim() !== "") {
     return envUrl.trim().replace(/\/+$/, "");
   }
-  // In dev browser with Vite proxy (e.g. localhost:5173), prefer relative path ""
-  // so requests route through proxy without cross-origin cookie / IPv6 localhost issues
-  if (window.location.port === "5173" || window.location.hostname === "localhost") {
-    return "";
-  }
-  return DEFAULT_BACKEND_URL;
+  // In the browser, always return relative path "" so that all API requests
+  // are made to the same origin (http://localhost:8000 or via proxy),
+  // preventing cross-origin issues and hardcoded port mismatches.
+  return "";
 }
 
 // ─── Interfaces & Types ────────────────────────────────────────────────────────
@@ -327,11 +325,11 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
         res = await executeFetch(`${DEFAULT_BACKEND_URL}${endpoint}`);
       } catch {
         console.error(`Network Error on [${method} ${endpoint}]: Backend server is unreachable at ${DEFAULT_BACKEND_URL}`);
-        throw new Error("Unable to connect to the server. Please ensure the backend is running on http://127.0.0.1:8000.");
+        throw new Error("Unable to connect to the server. Please ensure the backend is running on http://localhost:8000.");
       }
     } else {
       console.error(`Network Error on [${method} ${endpoint}]: Backend server is unreachable at ${primaryUrl || DEFAULT_BACKEND_URL}`);
-      throw new Error("Unable to connect to the server. Please ensure the backend is running on http://127.0.0.1:8000.");
+      throw new Error("Unable to connect to the server. Please ensure the backend is running on http://localhost:8000.");
     }
   }
 
@@ -345,7 +343,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
         // Direct also down
       }
     }
-    throw new Error("Unable to connect to the server. Backend service on http://127.0.0.1:8000 is unreachable.");
+    throw new Error("Unable to connect to the server. Backend service on http://localhost:8000 is unreachable.");
   }
 
   if (!res.ok) {

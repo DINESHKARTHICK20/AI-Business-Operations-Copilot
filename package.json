@@ -4,11 +4,13 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
+    "start": "python main.py",
+    "serve": "npm run build && python main.py",
     "build": "vite build",
     "dev": "vite",
     "dev:all": "concurrently \"npm run dev\" \"npm run server\"",
-    "server": "python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload",
-    "dev:backend": "python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload"
+    "server": "python main.py",
+    "dev:backend": "python main.py"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",

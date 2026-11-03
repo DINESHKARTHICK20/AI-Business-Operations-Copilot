@@ -18,7 +18,8 @@ import joblib
 import pandas as pd
 
 from fastapi import FastAPI, HTTPException, Query, Header, Depends, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
@@ -55,6 +56,11 @@ else:
 BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
+
+PROJECT_ROOT = BASE_DIR.parent
+DIST_DIR = PROJECT_ROOT / "dist"
+DIST_ASSETS_DIR = DIST_DIR / "assets"
+DIST_INDEX_FILE = DIST_DIR / "index.html"
 
 MODEL_DIR = BASE_DIR / "models"
 MODEL_DIR.mkdir(exist_ok=True)
@@ -376,6 +382,11 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
+# Static Assets Mount for Built Frontend (Vite)
+DIST_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/assets", StaticFiles(directory=str(DIST_ASSETS_DIR)), name="static_assets")
+
+
 # ============================================================
 # ML TRAINING & DATA GENERATION FUNCTIONS
 # ============================================================
@@ -678,6 +689,8 @@ class UserLoginRequest(BaseModel):
 
 @app.get("/")
 def home():
+    if DIST_INDEX_FILE.exists():
+        return FileResponse(str(DIST_INDEX_FILE))
     return {
         "project": "AI Business Operations Copilot",
         "status": "Backend running",
@@ -686,7 +699,8 @@ def home():
             "Customer Churn Prediction",
             "Sales Forecasting",
             "Inventory Demand Prediction"
-        ]
+        ],
+        "notice": "Frontend build (dist/index.html) not found. Run 'npm run build' to generate static assets."
     }
 
 
@@ -3093,6 +3107,38 @@ def generate_action_center_items(conn=None):
 def get_action_center(user: dict = Depends(get_authenticated_user)):
     return generate_action_center_items()
 
+
+# ============================================================
+# SPA CLIENT-SIDE FALLBACK ROUTE
+# ============================================================
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def serve_spa_frontend(full_path: str):
+    # Strictly protect API routes, health, and docs from being caught by SPA fallback
+    if (
+        full_path.startswith("api/")
+        or full_path == "api"
+        or full_path == "health"
+        or full_path.startswith("health/")
+        or full_path.startswith("docs")
+        or full_path.startswith("openapi.json")
+    ):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    # Check if a static file directly in dist exists (e.g. favicon.ico, logo.svg)
+    if full_path and DIST_DIR.exists():
+        direct_file = DIST_DIR / full_path
+        if direct_file.is_file():
+            return FileResponse(str(direct_file))
+
+    # Fallback to SPA index.html for client-side routing
+    if DIST_INDEX_FILE.exists():
+        return FileResponse(str(DIST_INDEX_FILE))
+
+    raise HTTPException(
+        status_code=404,
+        detail="Frontend build (dist/index.html) not found. Run 'npm run build' first."
+    )
 
 
 # ============================================================

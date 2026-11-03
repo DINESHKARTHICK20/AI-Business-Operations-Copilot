@@ -775,7 +775,7 @@ function LoginPage({
       ) {
         setServerStatus("offline");
         setIsConnectionError(true);
-        setErrorMsg("Unable to connect to the backend server. Please verify the FastAPI backend is running on http://127.0.0.1:8000 and try again.");
+        setErrorMsg("Unable to connect to the backend server. Please verify the FastAPI backend is running on http://localhost:8000 and try again.");
       } else {
         setIsConnectionError(false);
         setErrorMsg(msg || "Failed to sign in. Please verify your credentials.");
@@ -1001,7 +1001,7 @@ function SignUpPage({
     } catch (err: any) {
       const msg = err?.message || "";
       if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || err.name === "TypeError" || msg.includes("Unable to connect") || msg.includes("unreachable")) {
-        setErrorMsg("Unable to connect to the backend server. Please verify the FastAPI backend is running on http://127.0.0.1:8000.");
+        setErrorMsg("Unable to connect to the backend server. Please verify the FastAPI backend is running on http://localhost:8000.");
       } else if (msg.includes("already exists")) {
         setErrorMsg("An account with this email already exists. Please sign in.");
       } else {
