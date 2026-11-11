@@ -771,14 +771,21 @@ function LoginPage({
         msg.includes("Unable to connect") ||
         msg.includes("unreachable") ||
         msg.includes("502") ||
-        msg.includes("504")
+        msg.includes("504") ||
+        msg.includes("proxy error") ||
+        msg.includes("ECONNREFUSED") ||
+        msg.includes("ECONNRESET")
       ) {
         setServerStatus("offline");
         setIsConnectionError(true);
-        setErrorMsg("Unable to connect to the backend server. Please verify the FastAPI backend is running on http://localhost:8000 and try again.");
+        setErrorMsg("Unable to connect to the backend server. Please check your connection and try again.");
       } else {
         setIsConnectionError(false);
-        setErrorMsg(msg || "Failed to sign in. Please verify your credentials.");
+        const displayMsg =
+          msg === "Internal Server Error" || msg === "An internal server error occurred. Please try again."
+            ? "An unexpected server error occurred while processing your sign-in. Please try again."
+            : (msg || "Failed to sign in. Please verify your credentials.");
+        setErrorMsg(displayMsg);
       }
     } finally {
       setLoading(false);
@@ -1001,7 +1008,7 @@ function SignUpPage({
     } catch (err: any) {
       const msg = err?.message || "";
       if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || err.name === "TypeError" || msg.includes("Unable to connect") || msg.includes("unreachable")) {
-        setErrorMsg("Unable to connect to the backend server. Please verify the FastAPI backend is running on http://localhost:8000.");
+        setErrorMsg("Unable to connect to the backend server. Please check your connection and try again.");
       } else if (msg.includes("already exists")) {
         setErrorMsg("An account with this email already exists. Please sign in.");
       } else {

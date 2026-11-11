@@ -3,17 +3,10 @@
  * Connects React UI to FastAPI backend running on http://localhost:8000
  */
 
-export const DEFAULT_BACKEND_URL = "http://localhost:8000";
-
 export function getBaseApiUrl(): string {
-  if (typeof window === "undefined") return DEFAULT_BACKEND_URL;
-  const envUrl = (import.meta as any)?.env?.VITE_API_URL;
-  if (typeof envUrl === "string" && envUrl.trim() !== "") {
-    return envUrl.trim().replace(/\/+$/, "");
-  }
   // In the browser, always return relative path "" so that all API requests
-  // are made to the same origin (http://localhost:8000 or via proxy),
-  // preventing cross-origin issues and hardcoded port mismatches.
+  // are routed through the Vite proxy (http://localhost:5173 -> http://127.0.0.1:8000),
+  // keeping the application on ONLY http://localhost:5173/ and avoiding cross-origin issues.
   return "";
 }
 
@@ -319,42 +312,29 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   try {
     res = await executeFetch(primaryUrl);
   } catch (err: any) {
-    // If relative request through proxy failed with network error, try direct backend URL fallback
-    if (baseUrl === "" && (err.name === "TypeError" || err.message?.includes("fetch"))) {
-      try {
-        res = await executeFetch(`${DEFAULT_BACKEND_URL}${endpoint}`);
-      } catch {
-        console.error(`Network Error on [${method} ${endpoint}]: Backend server is unreachable at ${DEFAULT_BACKEND_URL}`);
-        throw new Error("Unable to connect to the server. Please ensure the backend is running on http://localhost:8000.");
-      }
-    } else {
-      console.error(`Network Error on [${method} ${endpoint}]: Backend server is unreachable at ${primaryUrl || DEFAULT_BACKEND_URL}`);
-      throw new Error("Unable to connect to the server. Please ensure the backend is running on http://localhost:8000.");
-    }
-  }
-
-  // Handle gateway errors (502 / 504 from dev proxy if backend is offline)
-  if (res.status === 502 || res.status === 504) {
-    if (baseUrl === "") {
-      try {
-        const directRes = await executeFetch(`${DEFAULT_BACKEND_URL}${endpoint}`);
-        if (directRes.ok) return await directRes.json();
-      } catch {
-        // Direct also down
-      }
-    }
-    throw new Error("Unable to connect to the server. Backend service on http://localhost:8000 is unreachable.");
+    console.error(`Network Error on [${method} ${endpoint}]:`, err);
+    throw new Error("Unable to connect to the server. Please verify the application is running.");
   }
 
   if (!res.ok) {
     const errorText = await res.text();
-    let errorJson;
+    let errorJson: any = null;
     try {
       errorJson = JSON.parse(errorText);
     } catch {
-      errorJson = { detail: errorText };
+      errorJson = null;
     }
-    const errMsg = errorJson.detail || errorJson.message || `HTTP Error ${res.status}: ${res.statusText}`;
+
+    if (!errorJson && (res.status === 500 || res.status === 502 || res.status === 504)) {
+      throw new Error("Unable to connect to the backend server. Please verify the FastAPI backend is running and healthy.");
+    }
+
+    const errMsg =
+      errorJson?.detail ||
+      errorJson?.message ||
+      (res.status === 500
+        ? "An unexpected server error occurred while processing your request. Please try again."
+        : `HTTP Error ${res.status}: ${res.statusText}`);
     throw new Error(errMsg);
   }
   return await res.json();

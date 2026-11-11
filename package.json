@@ -7,7 +7,8 @@
     "start": "python main.py",
     "serve": "npm run build && python main.py",
     "build": "vite build",
-    "dev": "vite",
+    "dev": "node scripts/dev.mjs",
+    "dev:frontend": "vite",
     "dev:all": "concurrently \"npm run dev\" \"npm run server\"",
     "server": "python main.py",
     "dev:backend": "python main.py"

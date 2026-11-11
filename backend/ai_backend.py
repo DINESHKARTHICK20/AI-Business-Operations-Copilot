@@ -25,6 +25,13 @@ from pydantic import BaseModel, Field
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import accuracy_score, mean_absolute_error
 from sklearn.model_selection import train_test_split
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger("bizops.auth")
 
 
 # ============================================================
@@ -76,8 +83,7 @@ def get_db():
     conn = sqlite3.connect(str(DB_PATH), timeout=30.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA busy_timeout=30000;")
+        conn.execute("PRAGMA busy_timeout = 30000;")
     except Exception:
         pass
     return conn
@@ -86,6 +92,11 @@ def get_db():
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
+    except Exception:
+        pass
 
     # Customers Table
     cursor.execute("""
@@ -231,6 +242,12 @@ def init_db():
     if "is_active" not in user_cols and len(user_cols) > 0:
         cursor.execute("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1")
 
+    # Sync password_hash from legacy password column if password_hash is empty
+    try:
+        cursor.execute("UPDATE users SET password_hash = password WHERE (password_hash IS NULL OR password_hash = '') AND password != ''")
+    except Exception:
+        pass
+
     # User Sessions Table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS user_sessions (
@@ -249,6 +266,26 @@ def init_db():
         cursor.execute("ALTER TABLE user_sessions ADD COLUMN last_activity TEXT DEFAULT ''")
     if "revoked_at" not in sess_cols and len(sess_cols) > 0:
         cursor.execute("ALTER TABLE user_sessions ADD COLUMN revoked_at TEXT DEFAULT NULL")
+
+    # Ensure index on user_sessions expires_at and user_id for fast lookup & pruning
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at)")
+
+    # Prune orphaned legacy sessions
+    try:
+        cursor.execute("DELETE FROM user_sessions WHERE user_id NOT IN (SELECT id FROM users)")
+    except Exception:
+        pass
+
+    # Prune expired sessions at startup to keep the table lean
+    try:
+        now_startup = __import__('datetime').datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("DELETE FROM user_sessions WHERE expires_at < ?", (now_startup,))
+        pruned = cursor.rowcount
+        if pruned > 0:
+            print(f"[startup] Pruned {pruned} expired session(s) from user_sessions")
+    except Exception:
+        pass
 
 
     # Seed initial data if tables are empty (Preserving all existing records)
@@ -372,14 +409,50 @@ app.add_middleware(
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    if SESSION_COOKIE_SECURE:
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    return response
+    try:
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        if SESSION_COOKIE_SECURE:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
+    except Exception as exc:
+        logger.error(
+            "Unhandled server exception on %s %s: %s",
+            request.method,
+            request.url.path,
+            exc,
+            exc_info=True
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": "An unexpected server error occurred. Please try again.",
+                "detail": "An unexpected server error occurred. Please try again."
+            }
+        )
+
+
+@app.exception_handler(Exception)
+async def global_unhandled_exception_handler(request: Request, exc: Exception):
+    logger.error(
+        "Unhandled server exception on %s %s: %s",
+        request.method,
+        request.url.path,
+        exc,
+        exc_info=True
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "message": "An unexpected server error occurred. Please try again later.",
+            "detail": "An unexpected server error occurred. Please try again later."
+        }
+    )
 
 
 # Static Assets Mount for Built Frontend (Vite)
@@ -830,11 +903,12 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_user_session(cursor, user_id: int) -> str:
     """Generate a cryptographically secure session token and store in user_sessions (7-day validity)."""
-    token = secrets.token_urlsafe(32)
     now_dt = datetime.now()
     created_at = now_dt.strftime("%Y-%m-%d %H:%M:%S")
     expires_at = (now_dt + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
     last_activity = created_at
+
+    token = secrets.token_urlsafe(32)
     cursor.execute("""
     INSERT INTO user_sessions (token, user_id, created_at, expires_at, last_activity, revoked_at)
     VALUES (?, ?, ?, ?, ?, NULL)
@@ -857,7 +931,7 @@ def get_authenticated_user(request: Request) -> dict:
     cursor = conn.cursor()
     try:
         cursor.execute("""
-        SELECT s.token, s.expires_at, s.revoked_at, u.id, u.name, u.email, u.company, u.biz_type, u.is_active
+        SELECT s.token, s.expires_at, s.revoked_at, s.last_activity, u.id, u.name, u.email, u.company, u.biz_type, u.is_active
         FROM user_sessions s
         JOIN users u ON s.user_id = u.id
         WHERE s.token = ?
@@ -881,12 +955,27 @@ def get_authenticated_user(request: Request) -> dict:
         except ValueError:
             pass
 
+        # Throttle last_activity updates to at most once every 5 minutes to avoid SQLite write lock contention
         try:
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute("UPDATE user_sessions SET last_activity = ? WHERE token = ?", (now_str, token.strip()))
-            conn.commit()
+            last_act_str = row_dict.get("last_activity") or ""
+            should_update = True
+            if last_act_str:
+                try:
+                    last_act_dt = datetime.strptime(last_act_str, "%Y-%m-%d %H:%M:%S")
+                    if (datetime.now() - last_act_dt).total_seconds() < 300:
+                        should_update = False
+                except ValueError:
+                    pass
+
+            if should_update:
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                cursor.execute("UPDATE user_sessions SET last_activity = ? WHERE token = ?", (now_str, token.strip()))
+                conn.commit()
         except Exception:
-            pass
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
         return {
             "id": row_dict["id"],
@@ -896,7 +985,10 @@ def get_authenticated_user(request: Request) -> dict:
             "biz_type": row_dict["biz_type"] or "E-commerce"
         }
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 class LogoutRequest(BaseModel):
@@ -983,8 +1075,30 @@ def register_user(req: UserRegisterRequest, response: Response):
         user_id = cursor.lastrowid
 
         conn.commit()
+    except HTTPException:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    except sqlite3.IntegrityError:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail="An account with this email already exists. Please sign in.")
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.error("Unexpected error during registration for %s: %s", clean_email, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred while creating your account. Please try again.")
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     csrf_tok = generate_csrf_token()
     response.set_cookie(
@@ -1037,80 +1151,134 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
             detail=f"Too many failed login attempts. Please try again in {max(1, remaining // 60)} minute{'s' if remaining > 60 else ''}."
         )
 
-    conn = get_db()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-        SELECT id, name, email, password_hash, password, company, biz_type, is_active
-        FROM users
-        WHERE LOWER(email) = LOWER(?)
-        """, (clean_email,))
-        user_row = cursor.fetchone()
+    # Retry loop with backoff for SQLite transient busy / lock conditions
+    max_retries = 3
+    for attempt in range(max_retries):
+        conn = get_db()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+            SELECT id, name, email, password_hash, password, company, biz_type, is_active
+            FROM users
+            WHERE LOWER(email) = LOWER(?)
+            """, (clean_email,))
+            user_row = cursor.fetchone()
 
-        if not user_row:
-            login_limiter.record_failure(rate_key)
-            login_limiter.record_failure(client_ip)
-            raise HTTPException(status_code=401, detail="Invalid email or password.")
+            if not user_row:
+                login_limiter.record_failure(rate_key)
+                login_limiter.record_failure(client_ip)
+                raise HTTPException(status_code=401, detail="Invalid email or password.")
 
-        user_dict = dict(user_row)
-        if user_dict.get("is_active") == 0:
-            raise HTTPException(status_code=401, detail="Account is disabled.")
+            user_dict = dict(user_row)
+            if user_dict.get("is_active") == 0:
+                raise HTTPException(status_code=401, detail="Account is disabled.")
 
-        stored_hash = user_dict.get("password_hash") or user_dict.get("password") or ""
+            stored_hash = user_dict.get("password_hash") or user_dict.get("password") or ""
 
-        if not verify_password(raw_password, stored_hash):
-            login_limiter.record_failure(rate_key)
-            login_limiter.record_failure(client_ip)
-            raise HTTPException(status_code=401, detail="Invalid email or password.")
+            if not stored_hash:
+                logger.warning(
+                    "Login attempt for account %s has no password hash stored. "
+                    "This account cannot be authenticated until a password is set.",
+                    clean_email
+                )
 
-        # Reset rate limiting counter on success
-        login_limiter.reset(rate_key)
-        login_limiter.reset(client_ip)
+            if not verify_password(raw_password, stored_hash):
+                login_limiter.record_failure(rate_key)
+                login_limiter.record_failure(client_ip)
+                raise HTTPException(status_code=401, detail="Invalid email or password.")
 
-        # Upgrade to bcrypt if stored hash is legacy format
-        if not stored_hash.startswith(("$2b$", "$2a$", "$2y$")):
-            new_hash = hash_password(raw_password)
-            cursor.execute("UPDATE users SET password_hash = ?, password = ? WHERE id = ?", (new_hash, new_hash, user_dict["id"]))
+            # Reset rate limiting counter on success
+            login_limiter.reset(rate_key)
+            login_limiter.reset(client_ip)
 
-        token = create_user_session(cursor, user_dict["id"])
-        csrf_tok = generate_csrf_token()
-        conn.commit()
-    finally:
-        conn.close()
+            # Upgrade to bcrypt if stored hash is legacy format
+            if not stored_hash.startswith(("$2b$", "$2a$", "$2y$")):
+                new_hash = hash_password(raw_password)
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                cursor.execute(
+                    "UPDATE users SET password_hash = ?, password = ?, updated_at = ? WHERE id = ?",
+                    (new_hash, new_hash, now_str, user_dict["id"])
+                )
 
-    # Set HTTP-only session cookie
-    response.set_cookie(
-        key="session_token",
-        value=token,
-        httponly=True,
-        samesite="lax",
-        path="/",
-        secure=SESSION_COOKIE_SECURE,
-        max_age=7 * 86400
-    )
-    # Set readable CSRF cookie
-    response.set_cookie(
-        key="csrf_token",
-        value=csrf_tok,
-        httponly=False,
-        samesite="lax",
-        path="/",
-        secure=SESSION_COOKIE_SECURE,
-        max_age=7 * 86400
-    )
+            token = create_user_session(cursor, user_dict["id"])
+            csrf_tok = generate_csrf_token()
+            conn.commit()
 
-    return {
-        "status": "success",
-        "token": token,
-        "user": {
-            "id": user_dict["id"],
-            "name": user_dict["name"],
-            "email": user_dict["email"],
-            "company": user_dict["company"] or "Nexus Commerce Pvt. Ltd",
-            "biz_type": user_dict["biz_type"] or "E-commerce"
-        },
-        "csrf_token": csrf_tok
-    }
+            # Set HTTP-only session cookie
+            response.set_cookie(
+                key="session_token",
+                value=token,
+                httponly=True,
+                samesite="lax",
+                path="/",
+                secure=SESSION_COOKIE_SECURE,
+                max_age=7 * 86400
+            )
+            # Set readable CSRF cookie
+            response.set_cookie(
+                key="csrf_token",
+                value=csrf_tok,
+                httponly=False,
+                samesite="lax",
+                path="/",
+                secure=SESSION_COOKIE_SECURE,
+                max_age=7 * 86400
+            )
+
+            logger.info("User login successful: id=%s email=%s", user_dict["id"], clean_email)
+
+            return {
+                "status": "success",
+                "token": token,
+                "user": {
+                    "id": user_dict["id"],
+                    "name": user_dict["name"],
+                    "email": user_dict["email"],
+                    "company": user_dict["company"] or "Nexus Commerce Pvt. Ltd",
+                    "biz_type": user_dict["biz_type"] or "E-commerce"
+                },
+                "csrf_token": csrf_tok
+            }
+
+        except HTTPException:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        except sqlite3.OperationalError as oe:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            is_locked = "locked" in str(oe).lower() or "busy" in str(oe).lower()
+            if is_locked and attempt < max_retries - 1:
+                logger.warning(
+                    "Database busy during login for %s (attempt %d/%d). Retrying...",
+                    clean_email, attempt + 1, max_retries
+                )
+                time.sleep(0.05 * (2 ** attempt))
+                continue
+            logger.error("Database operational error during login for %s: %s", clean_email, oe, exc_info=True)
+            raise HTTPException(
+                status_code=503,
+                detail="Database is momentarily busy. Please try again in a few seconds."
+            )
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            logger.error("Unexpected error during login for %s: %s", clean_email, e, exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail="An unexpected error occurred while processing your sign-in. Please try again."
+            )
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 @app.get("/api/auth/me")
@@ -1142,8 +1310,17 @@ def logout_user(request: Request, response: Response):
             cursor.execute("UPDATE user_sessions SET revoked_at = ? WHERE token = ?", (now_str, token.strip()))
             cursor.execute("DELETE FROM user_sessions WHERE token = ?", (token.strip(),))
             conn.commit()
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            logger.warning("Error during logout session deletion: %s", e)
         finally:
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     response.delete_cookie("session_token", path="/")
     response.delete_cookie("csrf_token", path="/")
@@ -1162,10 +1339,15 @@ def logout_user(request: Request, response: Response):
 def get_customers(user: dict = Depends(get_authenticated_user)):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM customers ORDER BY id ASC")
-    rows = [dict(r) for r in cursor.fetchall()]
-    conn.close()
-    return rows
+    try:
+        cursor.execute("SELECT * FROM customers ORDER BY id ASC")
+        rows = [dict(r) for r in cursor.fetchall()]
+        return rows
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.post("/api/customers")
@@ -1363,10 +1545,15 @@ def predict_churn(request: ChurnRequest, user: dict = Depends(get_authenticated_
 def get_employees(user: dict = Depends(get_authenticated_user)):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM employees ORDER BY id ASC")
-    rows = [dict(r) for r in cursor.fetchall()]
-    conn.close()
-    return rows
+    try:
+        cursor.execute("SELECT * FROM employees ORDER BY id ASC")
+        rows = [dict(r) for r in cursor.fetchall()]
+        return rows
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.post("/api/employees")
@@ -1438,10 +1625,15 @@ def delete_employee(emp_id: int, user: dict = Depends(get_authenticated_user)):
 def get_inventory(user: dict = Depends(get_authenticated_user)):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM products ORDER BY id ASC")
-    rows = [dict(r) for r in cursor.fetchall()]
-    conn.close()
-    return rows
+    try:
+        cursor.execute("SELECT * FROM products ORDER BY id ASC")
+        rows = [dict(r) for r in cursor.fetchall()]
+        return rows
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.post("/api/inventory")
@@ -1824,7 +2016,8 @@ def create_invoice(inv: InvoiceCreate, user: dict = Depends(get_authenticated_us
     except Exception as e:
         conn.rollback()
         conn.close()
-        raise HTTPException(status_code=500, detail=f"Failed to create invoice: {str(e)}")
+        logger.error("Invoice creation failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create invoice. Please try again.")
 
 
 @app.patch("/api/invoices/{invoice_id}/status")
@@ -1965,253 +2158,6 @@ def predict_sales(request: SalesRequest, user: dict = Depends(get_authenticated_
 # ============================================================
 # 6. DASHBOARD & INSIGHTS APIS
 # ============================================================
-
-def compute_business_health():
-    conn = get_db()
-    cursor = conn.cursor()
-
-    # 1. Sales Growth (Weight: 20%)
-    # Using sales monthly trajectory (recent vs previous month: Dec 85200 vs Nov 78500 = +8.5%)
-    growth_rate_pct = 8.5
-    sales_score = max(0, min(100, round(75 + growth_rate_pct * 1.5)))
-    sales_detail = {
-        "score": sales_score,
-        "weight": 20,
-        "metric": f"+{growth_rate_pct:.1f}% MoM",
-        "status": "positive" if sales_score >= 70 else "warning" if sales_score >= 50 else "danger"
-    }
-
-    # 2. Profit Margin (Weight: 20%)
-    cursor.execute("SELECT buy, sell, qty FROM profit_products")
-    profit_rows = cursor.fetchall()
-    if profit_rows:
-        total_rev = sum(r[1] * r[2] for r in profit_rows)
-        total_cost = sum(r[0] * r[2] for r in profit_rows)
-        total_profit = max(0.0, total_rev - total_cost)
-        margin_pct = (total_profit / max(1.0, total_rev)) * 100
-        profit_score = max(0, min(100, round(margin_pct * 1.8)))
-    else:
-        margin_pct = 45.0
-        profit_score = 81
-    profit_detail = {
-        "score": profit_score,
-        "weight": 20,
-        "metric": f"{margin_pct:.1f}% margin",
-        "status": "positive" if profit_score >= 70 else "warning" if profit_score >= 50 else "danger"
-    }
-
-    # 3. Inventory Health (Weight: 15%)
-    cursor.execute("SELECT COUNT(*) FROM products")
-    total_products = max(1, cursor.fetchone()[0])
-    cursor.execute("SELECT COUNT(*) FROM products WHERE status = 'In Stock'")
-    in_stock_count = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM products WHERE status = 'Low Stock'")
-    low_stock_count = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM products WHERE status = 'Critical'")
-    critical_count = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM products WHERE status = 'Out of Stock'")
-    out_of_stock_count = cursor.fetchone()[0]
-
-    in_stock_pct = (in_stock_count / total_products) * 100
-    penalty = (out_of_stock_count * 18) + (critical_count * 12) + (low_stock_count * 6)
-    inventory_score = max(0, min(100, round(in_stock_pct - penalty + 12)))
-    inventory_detail = {
-        "score": inventory_score,
-        "weight": 15,
-        "metric": f"{in_stock_count}/{total_products} in stock",
-        "status": "positive" if inventory_score >= 70 else "warning" if inventory_score >= 50 else "danger"
-    }
-
-    # 4. Customer Churn Risk (Weight: 15%)
-    cursor.execute("SELECT AVG(churn), COUNT(*) FROM customers")
-    avg_churn_val, total_custs = cursor.fetchone()
-    avg_churn = float(avg_churn_val or 20.0)
-    cursor.execute("SELECT COUNT(*) FROM customers WHERE churn >= 50")
-    high_churn_count = cursor.fetchone()[0]
-    churn_score = max(0, min(100, round(100 - avg_churn)))
-    churn_detail = {
-        "score": churn_score,
-        "weight": 15,
-        "metric": f"{avg_churn:.1f}% avg churn",
-        "status": "positive" if churn_score >= 70 else "warning" if churn_score >= 50 else "danger"
-    }
-
-    # 5. Outstanding Invoices (Weight: 15%)
-    cursor.execute("SELECT status, COALESCE(SUM(amount_num), 0), COUNT(*) FROM invoices GROUP BY status")
-    inv_summary = {r[0]: {"total": float(r[1]), "count": r[2]} for r in cursor.fetchall()}
-    total_inv_amount = sum(v["total"] for v in inv_summary.values())
-    paid_inv_amount = inv_summary.get("Paid", {}).get("total", 0.0)
-    pending_inv_amount = inv_summary.get("Pending", {}).get("total", 0.0)
-    overdue_inv_amount = inv_summary.get("Overdue", {}).get("total", 0.0)
-    overdue_count = inv_summary.get("Overdue", {}).get("count", 0)
-
-    paid_ratio = (paid_inv_amount / max(1.0, total_inv_amount)) * 100
-    overdue_ratio = (overdue_inv_amount / max(1.0, total_inv_amount)) * 100
-    invoices_score = max(0, min(100, round(paid_ratio * 0.7 - overdue_ratio * 0.5 + 30)))
-    invoices_detail = {
-        "score": invoices_score,
-        "weight": 15,
-        "metric": f"{paid_ratio:.0f}% collected",
-        "status": "positive" if invoices_score >= 70 else "warning" if invoices_score >= 50 else "danger"
-    }
-
-    # 6. Employee Performance (Weight: 15%)
-    cursor.execute("SELECT AVG(performance), AVG(attendance), COUNT(*) FROM employees WHERE status != 'Inactive'")
-    avg_perf_val, avg_att_val, total_emps = cursor.fetchone()
-    avg_perf = float(avg_perf_val or 90.0)
-    avg_att = float(avg_att_val or 95.0)
-    employee_score = max(0, min(100, round(avg_perf * 0.7 + avg_att * 0.3)))
-    employee_detail = {
-        "score": employee_score,
-        "weight": 15,
-        "metric": f"{avg_perf:.1f}% avg rating",
-        "status": "positive" if employee_score >= 70 else "warning" if employee_score >= 50 else "danger"
-    }
-
-    conn.close()
-
-    # Overall Weighted Score Calculation
-    weighted_total = (
-        sales_score * 0.20 +
-        profit_score * 0.20 +
-        inventory_score * 0.15 +
-        churn_score * 0.15 +
-        invoices_score * 0.15 +
-        employee_score * 0.15
-    )
-    overall_score = max(0, min(100, round(weighted_total)))
-
-    # Health Level
-    if overall_score >= 90:
-        health_level = "Excellent"
-    elif overall_score >= 75:
-        health_level = "Good"
-    elif overall_score >= 60:
-        health_level = "Needs Attention"
-    elif overall_score >= 40:
-        health_level = "At Risk"
-    else:
-        health_level = "Critical"
-
-    # Why your score changed (Dynamic Reasons)
-    reasons = []
-
-    # Sales Reason
-    if sales_score >= 75:
-        reasons.append({
-            "type": "positive",
-            "component": "sales_growth",
-            "text": f"Sales revenue grew +{growth_rate_pct:.1f}% MoM driven by enterprise software renewals and service expansions."
-        })
-    else:
-        reasons.append({
-            "type": "negative",
-            "component": "sales_growth",
-            "text": "Sales trajectory showed slower momentum compared to the previous target period."
-        })
-
-    # Profit Reason
-    if profit_score >= 75:
-        reasons.append({
-            "type": "positive",
-            "component": "profit_margin",
-            "text": f"Profit margin is solid at {margin_pct:.1f}% across active software and product offerings."
-        })
-    else:
-        reasons.append({
-            "type": "negative",
-            "component": "profit_margin",
-            "text": f"Profit margin compressed to {margin_pct:.1f}% due to rising product procurement costs."
-        })
-
-    # Inventory Reason
-    if out_of_stock_count > 0 or critical_count > 0 or low_stock_count > 0:
-        low_items_total = out_of_stock_count + critical_count + low_stock_count
-        reasons.append({
-            "type": "negative",
-            "component": "inventory_health",
-            "text": f"Inventory health decreased: {low_items_total} product(s) are currently below safe reorder levels."
-        })
-    else:
-        reasons.append({
-            "type": "positive",
-            "component": "inventory_health",
-            "text": "Inventory health is optimal with all SKU stocks comfortably above reorder thresholds."
-        })
-
-    # Customer Churn Reason
-    if high_churn_count > 0:
-        reasons.append({
-            "type": "negative",
-            "component": "customer_churn",
-            "text": f"Customer churn risk elevated: {high_churn_count} customer(s) show elevated churn probability (>50%)."
-        })
-    else:
-        reasons.append({
-            "type": "positive",
-            "component": "customer_churn",
-            "text": f"Customer retention is healthy with a low average churn probability of {avg_churn:.1f}%."
-        })
-
-    # Invoices Reason
-    if overdue_count > 0:
-        reasons.append({
-            "type": "negative",
-            "component": "outstanding_invoices",
-            "text": f"Outstanding invoices: {overdue_count} overdue invoice(s) (₹{overdue_inv_amount:,.0f}) require payment follow-up."
-        })
-    else:
-        reasons.append({
-            "type": "positive",
-            "component": "outstanding_invoices",
-            "text": f"{paid_ratio:.0f}% of total invoiced revenue has been collected on schedule."
-        })
-
-    # Employee Reason
-    if employee_score >= 80:
-        reasons.append({
-            "type": "positive",
-            "component": "employee_performance",
-            "text": f"Employee performance remains strong at {avg_perf:.1f}% average rating and {avg_att:.1f}% attendance."
-        })
-    else:
-        reasons.append({
-            "type": "negative",
-            "component": "employee_performance",
-            "text": f"Employee attendance and output ratings averaged {avg_perf:.1f}%, slightly below quarterly targets."
-        })
-
-    return {
-        "overall_score": overall_score,
-        "health_level": health_level,
-        "weights": {
-            "sales_growth": 0.20,
-            "profit_margin": 0.20,
-            "inventory_health": 0.15,
-            "customer_churn": 0.15,
-            "outstanding_invoices": 0.15,
-            "employee_performance": 0.15
-        },
-        "components": {
-            "sales_growth": sales_score,
-            "profit_margin": profit_score,
-            "inventory_health": inventory_score,
-            "customer_churn": churn_score,
-            "outstanding_invoices": invoices_score,
-            "employee_performance": employee_score
-        },
-        "component_details": {
-            "sales_growth": sales_detail,
-            "profit_margin": profit_detail,
-            "inventory_health": inventory_detail,
-            "customer_churn": churn_detail,
-            "outstanding_invoices": invoices_detail,
-            "employee_performance": employee_detail
-        },
-        "reasons": reasons,
-        "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-
 
 @app.get("/api/business-health")
 def get_business_health(user: dict = Depends(get_authenticated_user)):
