@@ -11,24 +11,25 @@ const rootDir = path.resolve(__dirname, '..');
 const BACKEND_PORT = 8000;
 const FRONTEND_PORT = 5173;
 
-function getPidOnPort(port) {
+function getAllPidsOnPort(port) {
+  const pids = [];
   try {
     const out = execSync('netstat -ano -p tcp', { encoding: 'utf8' });
     for (const line of out.split('\n')) {
       if (line.includes(`:${port}`) && line.includes('LISTENING')) {
         const parts = line.trim().split(/\s+/);
         const pid = parseInt(parts[parts.length - 1], 10);
-        if (pid && !isNaN(pid) && pid !== process.pid) {
-          return pid;
+        if (pid && !isNaN(pid) && pid > 4 && pid !== process.pid && !pids.includes(pid)) {
+          pids.push(pid);
         }
       }
     }
   } catch {}
-  return null;
+  return pids;
 }
 
 function killPid(pid) {
-  if (!pid) return;
+  if (!pid || pid <= 4) return;
   try {
     if (process.platform === 'win32') {
       execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
@@ -36,6 +37,13 @@ function killPid(pid) {
       process.kill(pid, 'SIGKILL');
     }
   } catch {}
+}
+
+function freePort(port) {
+  const pids = getAllPidsOnPort(port);
+  for (const pid of pids) {
+    killPid(pid);
+  }
 }
 
 function findPython() {
@@ -108,10 +116,8 @@ function cleanupAndExit() {
   }
 
   // Double check no orphan process left on ports
-  const p8000 = getPidOnPort(BACKEND_PORT);
-  if (p8000) killPid(p8000);
-  const p5173 = getPidOnPort(FRONTEND_PORT);
-  if (p5173) killPid(p5173);
+  freePort(BACKEND_PORT);
+  freePort(FRONTEND_PORT);
 
   process.exit(0);
 }
@@ -127,19 +133,9 @@ async function main() {
   console.log('============================================================');
 
   // 1. Prevent duplicate backend processes and port conflicts
-  const existingBackendPid = getPidOnPort(BACKEND_PORT);
-  if (existingBackendPid) {
-    console.log(`[dev] Freeing port ${BACKEND_PORT} (terminating stale process PID ${existingBackendPid})...`);
-    killPid(existingBackendPid);
-    await new Promise((r) => setTimeout(r, 600));
-  }
-
-  const existingFrontendPid = getPidOnPort(FRONTEND_PORT);
-  if (existingFrontendPid) {
-    console.log(`[dev] Freeing port ${FRONTEND_PORT} (terminating stale process PID ${existingFrontendPid})...`);
-    killPid(existingFrontendPid);
-    await new Promise((r) => setTimeout(r, 600));
-  }
+  freePort(BACKEND_PORT);
+  freePort(FRONTEND_PORT);
+  await new Promise((r) => setTimeout(r, 400));
 
   // 2. Start Python FastAPI backend
   const pythonPath = findPython();
@@ -178,7 +174,7 @@ async function main() {
   // 4. Start Vite frontend server
   console.log(`[dev] Starting Vite dev server on http://localhost:${FRONTEND_PORT}/...`);
   const viteBin = path.join(rootDir, 'node_modules', 'vite', 'bin', 'vite.js');
-  viteProc = spawn(process.execPath, [viteBin], {
+  viteProc = spawn(process.execPath, [viteBin, '--host', '127.0.0.1', '--port', String(FRONTEND_PORT)], {
     cwd: rootDir,
     stdio: 'inherit',
     windowsHide: false,
