@@ -257,6 +257,16 @@ export interface ProfitProduct {
   qty: number;
 }
 
+export interface NotificationItem {
+  id: number;
+  type: string;
+  title: string;
+  desc: string;
+  read: boolean | number;
+  time?: string;
+  created_at?: string;
+}
+
 export interface UserSession {
   id?: number;
   name: string;
@@ -560,6 +570,19 @@ export const api = {
   // Profit Analyzer
   async getProfitProducts(): Promise<ProfitProduct[]> {
     return request<ProfitProduct[]>("/api/profit/products");
+  },
+
+  // Notifications
+  async getNotifications(): Promise<NotificationItem[]> {
+    return request<NotificationItem[]>("/api/notifications");
+  },
+
+  async markAllNotificationsRead(): Promise<{ status: string }> {
+    return request<{ status: string }>("/api/notifications/read-all", { method: "POST" });
+  },
+
+  async markNotificationRead(id: number): Promise<{ status: string }> {
+    return request<{ status: string }>(`/api/notifications/${id}/read`, { method: "POST" });
   },
 
   // Authentication & Users

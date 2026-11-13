@@ -108,106 +108,31 @@ type Page =
 
 // ─── Fallback Initial Data ───────────────────────────────────────────────────
 
-const initialRevenueData = [
-  { month: "Jan", revenue: 42000, expenses: 28000, profit: 14000 },
-  { month: "Feb", revenue: 47500, expenses: 30000, profit: 17500 },
-  { month: "Mar", revenue: 51200, expenses: 31500, profit: 19700 },
-  { month: "Apr", revenue: 49800, expenses: 29000, profit: 20800 },
-  { month: "May", revenue: 58600, expenses: 33000, profit: 25600 },
-  { month: "Jun", revenue: 63400, expenses: 35000, profit: 28400 },
-  { month: "Jul", revenue: 61200, expenses: 34000, profit: 27200 },
-  { month: "Aug", revenue: 67800, expenses: 36500, profit: 31300 },
-  { month: "Sep", revenue: 72400, expenses: 38000, profit: 34400 },
-  { month: "Oct", revenue: 69100, expenses: 37200, profit: 31900 },
-  { month: "Nov", revenue: 78500, expenses: 41000, profit: 37500 },
-  { month: "Dec", revenue: 85200, expenses: 44500, profit: 40700 },
-];
+// ─── Initial Dynamic Defaults ────────────────────────────────────────────────
 
-const initialDailyData = [
-  { day: "Mon", sales: 3200, orders: 28 },
-  { day: "Tue", sales: 4100, orders: 35 },
-  { day: "Wed", sales: 3800, orders: 31 },
-  { day: "Thu", sales: 5200, orders: 44 },
-  { day: "Fri", sales: 6100, orders: 52 },
-  { day: "Sat", sales: 4700, orders: 40 },
-  { day: "Sun", sales: 3100, orders: 26 },
-];
+const initialRevenueData: Array<{ month: string; revenue: number; expenses: number; profit: number }> = [];
+const initialDailyData: Array<{ day: string; sales: number; orders: number }> = [];
+const initialCustomerGrowth: Array<{ month: string; new: number; returning: number }> = [];
+const initialProductPieData: Array<{ name: string; value: number; color: string }> = [];
 
-const initialCustomerGrowth = [
-  { month: "Jan", new: 120, returning: 280 },
-  { month: "Feb", new: 145, returning: 310 },
-  { month: "Mar", new: 162, returning: 340 },
-  { month: "Apr", new: 138, returning: 365 },
-  { month: "May", new: 190, returning: 390 },
-  { month: "Jun", new: 215, returning: 420 },
-  { month: "Jul", new: 203, returning: 445 },
-];
-
-const initialProductPieData = [
-  { name: "Software", value: 38, color: "#4f46e5" },
-  { name: "Hardware", value: 25, color: "#8b5cf6" },
-  { name: "Services", value: 22, color: "#06b6d4" },
-  { name: "Training", value: 15, color: "#10b981" },
-];
-
-const fallbackCustomers: Customer[] = [
-  { id: 1, name: "Selvaraj Annamalai", email: "selvaraj@techcorp.in", company: "TechCorp India Pvt. Ltd", status: "Active", ltv: "₹10,40,000", orders: 24, joined: "Mar 2023", churn: 8 },
-  { id: 2, name: "Kavitha Sundaram", email: "kavitha@buildfast.in", company: "BuildFast Solutions", status: "Active", ltv: "₹7,20,000", orders: 17, joined: "Jun 2023", churn: 15 },
-  { id: 3, name: "Rajendhiran Palaniswamy", email: "rajendhiran@dataflow.in", company: "DataFlow Systems", status: "At Risk", ltv: "₹18,00,000", orders: 41, joined: "Jan 2023", churn: 67 },
-  { id: 4, name: "Gowrishankar Venkatesh", email: "gowri@cloudshift.in", company: "CloudShift India", status: "Inactive", ltv: "₹2,60,000", orders: 6, joined: "Sep 2023", churn: 88 },
-  { id: 5, name: "Tamilselvi Natarajan", email: "tamilselvi@nexalabs.in", company: "Nexa Labs Chennai", status: "Active", ltv: "₹26,50,000", orders: 63, joined: "Nov 2022", churn: 5 },
-  { id: 6, name: "Senthilkumar Murugan", email: "senthil@brightbridge.in", company: "BrightBridge Tech", status: "Active", ltv: "₹5,80,000", orders: 14, joined: "Apr 2023", churn: 22 },
-];
-
-const fallbackProducts: Product[] = [
-  { id: 1, name: "Enterprise Suite Pro", sku: "ESP-001", category: "Software", stock: 245, reorder: 50, price: "₹3,49,000", status: "In Stock", trend: "+12%" },
-  { id: 2, name: "Cloud Storage 1TB", sku: "CS1T-002", category: "Storage", stock: 12, reorder: 25, price: "₹24,900", status: "Low Stock", trend: "+8%" },
-  { id: 3, name: "API Access Tokens", sku: "AAT-003", category: "Services", stock: 891, reorder: 100, price: "₹4,099/mo", status: "In Stock", trend: "+31%" },
-  { id: 4, name: "Analytics Dashboard", sku: "AD-004", category: "Software", stock: 3, reorder: 20, price: "₹1,49,900", status: "Critical", trend: "-4%" },
-  { id: 5, name: "Hardware Sensor Kit", sku: "HSK-005", category: "Hardware", stock: 67, reorder: 30, price: "₹74,000", status: "In Stock", trend: "+5%" },
-  { id: 6, name: "Training Credits", sku: "TC-006", category: "Training", stock: 0, reorder: 50, price: "₹9,999", status: "Out of Stock", trend: "N/A" },
-];
-
-const fallbackInvoices: Invoice[] = [
-  { id: "INV-2026-001", client: "TechCorp India Pvt. Ltd", amount: "₹1,03,500", due: "Aug 15, 2026", issued: "Jul 15, 2026", status: "Paid", items: "Enterprise Suite Pro — 1 seat" },
-  { id: "INV-2026-002", client: "DataFlow Systems", amount: "₹72,800", due: "Aug 22, 2026", issued: "Jul 22, 2026", status: "Pending", items: "Hardware Sensor Kit & Support" },
-  { id: "INV-2026-003", client: "CloudShift India", amount: "₹26,600", due: "Jul 30, 2026", issued: "Jun 30, 2026", status: "Overdue", items: "Cloud Storage 1TB (Annual)" },
-  { id: "INV-2026-004", client: "Nexa Labs Chennai", amount: "₹1,80,000", due: "Sep 1, 2026", issued: "Aug 1, 2026", status: "Draft", items: "Enterprise Analytics Suite" },
-  { id: "INV-2026-005", client: "BuildFast Solutions", amount: "₹56,700", due: "Aug 10, 2026", issued: "Jul 10, 2026", status: "Paid", items: "API Access Tokens & Cloud Storage" },
-];
-
-const fallbackEmployees: Employee[] = [
-  { id: 1, name: "Anbarasi Krishnamoorthy", role: "Head of Sales", dept: "Sales", salary: "₹82,000/mo", status: "Active", attendance: 96, performance: 94, joined: "Jan 2021" },
-  { id: 2, name: "Thirunavukkarasu Rajan", role: "Senior Engineer", dept: "Engineering", salary: "₹1,04,000/mo", status: "Active", attendance: 98, performance: 91, joined: "Mar 2020" },
-  { id: 3, name: "Meenakshi Sundareswaran", role: "Product Manager", dept: "Product", salary: "₹94,000/mo", status: "Active", attendance: 94, performance: 88, joined: "Jun 2021" },
-  { id: 4, name: "Pazhanivel Arumugam", role: "Customer Success", dept: "Support", salary: "₹63,000/mo", status: "On Leave", attendance: 82, performance: 87, joined: "Sep 2022" },
-  { id: 5, name: "Valarmathi Subramanian", role: "Data Analyst", dept: "Analytics", salary: "₹74,000/mo", status: "Active", attendance: 97, performance: 92, joined: "Feb 2022" },
-];
-
-const notifications = [
-  { id: 1, type: "ai", title: "AI Insight: Revenue spike detected", desc: "Today's revenue is 34% above your weekly average. AI suggests extending flash sale.", time: "2 min ago", read: false },
-  { id: 2, type: "inventory", title: "Low stock alert: Analytics Dashboard", desc: "Only 3 units remaining. Reorder level is 20. AI recommends restocking immediately.", time: "18 min ago", read: false },
-  { id: 3, type: "payment", title: "Payment overdue: CloudShift invoice", desc: "INV-2026-003 for ₹26,600 is 5 days past due. Follow-up email sent.", time: "1 hr ago", read: false },
-  { id: 4, type: "customer", title: "Churn risk: Priya Nair (DataFlow AI)", desc: "67% churn probability detected. Last purchase 45 days ago. Recommend outreach.", time: "3 hrs ago", read: true },
-  { id: 5, type: "revenue", title: "Monthly target achieved", desc: "You've hit 87% of July's revenue target with 3 days remaining.", time: "Yesterday", read: true },
-  { id: 6, type: "employee", title: "Leave request: Carlos Mendez", desc: "Requested 5 days leave from Aug 12-16. Pending your approval.", time: "2 days ago", read: true },
-];
+const fallbackCustomers: Customer[] = [];
+const fallbackProducts: Product[] = [];
+const fallbackInvoices: Invoice[] = [];
+const fallbackEmployees: Employee[] = [];
+const notifications: Array<{ id: number; type: string; title: string; desc: string; time: string; read: boolean }> = [];
 
 const chatHistory = [
-  { id: 1, title: "Revenue analysis July", time: "Today" },
-  { id: 2, title: "Inventory restock plan", time: "Yesterday" },
-  { id: 3, title: "Customer churn report", time: "Jul 24" },
-  { id: 4, title: "Invoice generation Q2", time: "Jul 22" },
-  { id: 5, title: "Sales forecast Q3", time: "Jul 18" },
+  { id: 1, title: "Operations Overview", time: "Today" },
+  { id: 2, title: "Inventory Restock Planning", time: "Yesterday" },
+  { id: 3, title: "Customer Churn Analysis", time: "This week" }
 ];
 
 const suggestedPrompts = [
   "Show today's revenue breakdown",
-  "Predict next month's sales",
-  "Generate invoice for TechCorp",
-  "Summarize customer feedback",
+  "Predict customer churn risks",
   "Which products need restocking?",
-  "Show top 5 performing employees",
+  "Show employee team performance",
+  "Summarize active invoices"
 ];
 
 // ─── Shared Components ───────────────────────────────────────────────────────
@@ -1225,9 +1150,7 @@ function DashboardPage({ setPage, user }: { setPage: (p: Page) => void; user: Us
   const currentCategoryData = salesOverview?.product_categories || initialProductPieData;
   const currentGrowthData = salesOverview?.customer_growth || initialCustomerGrowth;
 
-  const lowStockItems = stats?.low_stock_alerts && stats.low_stock_alerts.length > 0
-    ? stats.low_stock_alerts.slice(0, 3)
-    : fallbackProducts.filter(p => p.status !== "In Stock").slice(0, 3);
+  const lowStockItems = stats?.low_stock_alerts || [];
 
   const fallbackActivity = [
     { icon: DollarSign, text: "Invoice #INV-2026-001 paid by TechCorp India — ₹1,03,500", time: "2 min ago", color: "text-emerald-500" },
@@ -1331,19 +1254,26 @@ function DashboardPage({ setPage, user }: { setPage: (p: Page) => void; user: Us
             <h2 className="text-sm font-semibold text-slate-800">AI Insights</h2>
           </div>
           <div className="space-y-3">
-            {(insights.length > 0 ? insights : [
-              { text: "Revenue up 23% today. Flash sale is performing above prediction.", type: "positive" as const },
-              { text: "3 customers show churn risk. Recommend outreach campaign.", type: "warning" as const },
-              { text: "Analytics Dashboard SKU critically low. Reorder recommended.", type: "danger" as const },
-              { text: "August ML forecast: ₹56.8L (+7.6% vs last month).", type: "info" as const },
-            ]).map(({ text, type }, i) => {
-              const colors = { positive: "text-emerald-700 bg-emerald-50 border-emerald-200", warning: "text-amber-700 bg-amber-50 border-amber-200", danger: "text-red-600 bg-red-50 border-red-200", info: "text-indigo-700 bg-indigo-50 border-indigo-200" };
-              return (
-                <div key={i} className={`text-xs p-3 rounded-xl border ${colors[type] || colors.info} leading-relaxed`}>
-                  {text}
-                </div>
-              );
-            })}
+            {insights.length > 0 ? (
+              insights.map(({ text, type }, i) => {
+                const colors: Record<string, string> = {
+                  positive: "text-emerald-700 bg-emerald-50 border-emerald-200",
+                  warning: "text-amber-700 bg-amber-50 border-amber-200",
+                  danger: "text-red-600 bg-red-50 border-red-200",
+                  info: "text-indigo-700 bg-indigo-50 border-indigo-200"
+                };
+                return (
+                  <div key={i} className={`text-xs p-3 rounded-xl border ${colors[type] || colors.info} leading-relaxed`}>
+                    {text}
+                  </div>
+                );
+              })
+            ) : (
+              <div className="text-xs p-4 rounded-xl border border-indigo-200 bg-white/70 text-slate-500 text-center">
+                <Sparkles size={20} className="mx-auto mb-2 text-indigo-400" />
+                Add your business records to unlock automated AI insights.
+              </div>
+            )}
           </div>
         </div>
 
@@ -1351,17 +1281,25 @@ function DashboardPage({ setPage, user }: { setPage: (p: Page) => void; user: Us
         <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
           <h2 className="text-sm font-semibold text-slate-800 mb-4">Recent Activity</h2>
           <div className="space-y-4">
-            {(activity.length > 0 ? activity : fallbackActivity).map(({ text, time, color }, i) => (
-              <div key={i} className="flex items-start gap-3">
-                <div className="w-7 h-7 rounded-full bg-slate-50 flex items-center justify-center shrink-0">
-                  <Activity size={13} className={color} />
+            {activity.length > 0 ? (
+              activity.map(({ text, time, color }, i) => (
+                <div key={i} className="flex items-start gap-3">
+                  <div className="w-7 h-7 rounded-full bg-slate-50 flex items-center justify-center shrink-0">
+                    <Activity size={13} className={color} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs text-slate-700 leading-relaxed">{text}</p>
+                    <p className="text-xs text-slate-400 mt-0.5">{time}</p>
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <p className="text-xs text-slate-700 leading-relaxed">{text}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">{time}</p>
-                </div>
+              ))
+            ) : (
+              <div className="py-6 text-center text-slate-400">
+                <Activity size={22} className="mx-auto mb-2 text-slate-300" />
+                <p className="text-xs">No recent activity recorded.</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">Actions you take will be logged here.</p>
               </div>
-            ))}
+            )}
           </div>
         </div>
 
@@ -2298,9 +2236,10 @@ function ActionCenterPage({ setPage }: { setPage: (page: Page) => void }) {
 function AICopilotPage() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Array<{ role: string; content: string; chart?: boolean }>>([
-    { role: "ai", content: "Hi! I'm your AI Business Copilot. I have full access to your business data — revenue, customers, inventory, invoices, and more. Ask me anything or let me surface insights for you.\n\n**Here's what I found this morning:**\n- Today's revenue is already **₹7,02,500** (+23% vs yesterday)\n- 3 customers are at churn risk — want me to draft outreach emails?\n- Analytics Dashboard SKU is critically low — shall I create a restock order?" },
-    { role: "user", content: "Show me today's revenue breakdown" },
-    { role: "ai", content: "Here's your revenue breakdown for today (July 29, 2026):\n\n**Total: ₹7,02,500**\n\n| Category | Amount | % of Total |\n|---|---|---|\n| Software | ₹2,66,550 | 38% |\n| Services | ₹1,75,625 | 25% |\n| Hardware | ₹1,47,525 | 21% |\n| Training | ₹1,12,400 | 16% |\n\nThe software spike is driven by 2 Enterprise Suite Pro renewals. Services are running 31% above your weekly average — the new API package is performing well.", chart: true },
+    {
+      role: "ai",
+      content: "Hello! I am your AI Business Operations Copilot. I have real-time access to your private database — customers, inventory, invoices, and performance.\n\nAsk me about your current revenue, customer churn risk, inventory restocking, or team performance."
+    }
   ]);
   const [typing, setTyping] = useState(false);
   const [activeChat, setActiveChat] = useState(0);
@@ -2319,7 +2258,7 @@ function AICopilotPage() {
     } catch (err) {
       setMessages(prev => [...prev, {
         role: "ai",
-        content: `I've analyzed your request for: **"${textToSend}"**\n\n- Current Revenue tracking at **₹52.8L** (+12% MoM)\n- Top revenue contributor: Software (38%)\n- At-risk accounts: Gowrishankar Venkatesh & Rajendhiran Palaniswamy\n\nWould you like me to generate a full operational report?`
+        content: `Unable to complete query for "${textToSend}". Please ensure the backend server is reachable.`
       }]);
     } finally {
       setTyping(false);
@@ -2486,7 +2425,7 @@ function AICopilotPage() {
 // ─── Customer Management ──────────────────────────────────────────────────────
 
 function CustomersPage() {
-  const [customersList, setCustomersList] = useState<Customer[]>(fallbackCustomers);
+  const [customersList, setCustomersList] = useState<Customer[]>([]);
   const [selected, setSelected] = useState<Customer | null>(null);
   const [view, setView] = useState<"table" | "cards">("table");
   const [search, setSearch] = useState("");
@@ -2500,8 +2439,8 @@ function CustomersPage() {
   const [email, setEmail] = useState("");
   const [company, setCompany] = useState("");
   const [status, setStatus] = useState<"Active" | "Inactive" | "At Risk">("Active");
-  const [ltv, setLtv] = useState("₹10,00,000");
-  const [orders, setOrders] = useState(20);
+  const [ltv, setLtv] = useState("₹0");
+  const [orders, setOrders] = useState(0);
 
   const fetchCustomers = () => {
     api.getCustomers()
@@ -2629,12 +2568,13 @@ function CustomersPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {filteredCustomers.map(c => (
-                    <tr
-                      key={c.id}
-                      onClick={() => handleSelectCustomer(c)}
-                      className={`hover:bg-slate-50 cursor-pointer transition-colors ${selected?.id === c.id ? "bg-indigo-50/50" : ""}`}
-                    >
+                  {filteredCustomers.length > 0 ? (
+                    filteredCustomers.map(c => (
+                      <tr
+                        key={c.id}
+                        onClick={() => handleSelectCustomer(c)}
+                        className={`hover:bg-slate-50 cursor-pointer transition-colors ${selected?.id === c.id ? "bg-indigo-50/50" : ""}`}
+                      >
                       <td className="px-5 py-3.5">
                         <div className="flex items-center gap-3">
                           <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-300 to-violet-400 flex items-center justify-center text-white text-xs font-bold shrink-0">
@@ -2666,13 +2606,26 @@ function CustomersPage() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={7} className="px-5 py-12 text-center text-slate-400">
+                      <Users size={32} className="mx-auto mb-2 text-slate-300" />
+                      <p className="text-sm font-medium text-slate-600">No customers found</p>
+                      <p className="text-xs text-slate-400 mt-1">Get started by adding your first business customer.</p>
+                      <button onClick={openAddModal} className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-semibold hover:bg-indigo-700 transition-colors shadow-sm">
+                        <Plus size={14} /> Add Customer
+                      </button>
+                    </td>
+                  </tr>
+                )}
                 </tbody>
               </table>
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-4 p-5">
-              {filteredCustomers.map(c => (
+              {filteredCustomers.length > 0 ? (
+                filteredCustomers.map(c => (
                 <div key={c.id} onClick={() => handleSelectCustomer(c)} className={`p-4 rounded-xl border transition-all cursor-pointer ${selected?.id === c.id ? "border-indigo-300 bg-indigo-50/40 shadow-sm" : "border-slate-100 hover:border-slate-200"}`}>
                   <div className="flex items-start justify-between mb-3">
                     <div className="flex items-center gap-3">
@@ -2698,7 +2651,17 @@ function CustomersPage() {
                     </div>
                   </div>
                 </div>
-              ))}
+              ))
+            ) : (
+              <div className="col-span-2 py-12 text-center text-slate-400">
+                <Users size={32} className="mx-auto mb-2 text-slate-300" />
+                <p className="text-sm font-medium text-slate-600">No customers found</p>
+                <p className="text-xs text-slate-400 mt-1">Get started by adding your first business customer.</p>
+                <button onClick={openAddModal} className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-semibold hover:bg-indigo-700 transition-colors shadow-sm">
+                  <Plus size={14} /> Add Customer
+                </button>
+              </div>
+            )}
             </div>
           )}
         </div>
@@ -2947,7 +2910,7 @@ function SalesPage() {
 // ─── Inventory Management ─────────────────────────────────────────────────────
 
 function InventoryPage() {
-  const [productsList, setProductsList] = useState<Product[]>(fallbackProducts);
+  const [productsList, setProductsList] = useState<Product[]>([]);
   const [selected, setSelected] = useState<Product | null>(null);
   const [search, setSearch] = useState("");
   const [demandForecast, setDemandForecast] = useState<InventoryForecastResult | null>(null);
@@ -3090,12 +3053,13 @@ function InventoryPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
-                {filtered.map(p => (
-                  <tr
-                    key={p.id}
-                    onClick={() => handleSelectProduct(p)}
-                    className={`hover:bg-slate-50 cursor-pointer transition-colors ${selected?.id === p.id ? "bg-indigo-50/50" : ""}`}
-                  >
+                {filtered.length > 0 ? (
+                  filtered.map(p => (
+                    <tr
+                      key={p.id}
+                      onClick={() => handleSelectProduct(p)}
+                      className={`hover:bg-slate-50 cursor-pointer transition-colors ${selected?.id === p.id ? "bg-indigo-50/50" : ""}`}
+                    >
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center shrink-0">
@@ -3123,7 +3087,19 @@ function InventoryPage() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={9} className="px-5 py-12 text-center text-slate-400">
+                    <Package size={32} className="mx-auto mb-2 text-slate-300" />
+                    <p className="text-sm font-medium text-slate-600">No products cataloged</p>
+                    <p className="text-xs text-slate-400 mt-1">Add catalog items to manage stock and forecast demand.</p>
+                    <button onClick={openAddModal} className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-semibold hover:bg-indigo-700 transition-colors shadow-sm">
+                      <Plus size={14} /> Add Product
+                    </button>
+                  </td>
+                </tr>
+              )}
               </tbody>
             </table>
           </div>
@@ -3278,8 +3254,8 @@ function parsePriceNum(priceStr: string | number | undefined): number {
 
 function InvoicesPage() {
   const [invoicesList, setInvoicesList] = useState<Invoice[]>(fallbackInvoices);
-  const [customersList, setCustomersList] = useState<Customer[]>(fallbackCustomers);
-  const [productsList, setProductsList] = useState<Product[]>(fallbackProducts);
+  const [customersList, setCustomersList] = useState<Customer[]>([]);
+  const [productsList, setProductsList] = useState<Product[]>([]);
   const [preview, setPreview] = useState<Invoice | null>(null);
   const [search, setSearch] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -3305,16 +3281,12 @@ function InvoicesPage() {
 
   const fetchDependencies = () => {
     api.getCustomers()
-      .then(custs => {
-        if (custs && custs.length > 0) setCustomersList(custs);
-      })
-      .catch(() => { });
+      .then(custs => setCustomersList(custs || []))
+      .catch(() => setCustomersList([]));
 
     api.getInventory()
-      .then(prods => {
-        if (prods && prods.length > 0) setProductsList(prods);
-      })
-      .catch(() => { });
+      .then(prods => setProductsList(prods || []))
+      .catch(() => setProductsList([]));
   };
 
   useEffect(() => {
@@ -3326,7 +3298,7 @@ function InvoicesPage() {
   const openCreateModal = () => {
     setErrorMessage(null);
     setSuccessMessage(null);
-    const defaultCust = customersList[0]?.company || customersList[0]?.name || "TechCorp India Pvt. Ltd";
+    const defaultCust = customersList[0]?.company || customersList[0]?.name || "";
     setClient(defaultCust);
 
     const defaultProd = productsList.find(p => p.stock > 0) || productsList[0];
@@ -3535,12 +3507,18 @@ function InvoicesPage() {
       )}
 
       <div className="grid grid-cols-4 gap-4">
-        {[
-          { title: "Total Invoiced", value: "₹4,39,600", change: "+15%", icon: FileText, color: "bg-indigo-500" },
-          { title: "Paid", value: "₹1,60,200", change: "+22%", icon: CheckCircle, color: "bg-emerald-500" },
-          { title: "Pending", value: "₹2,52,800", change: "-3%", icon: Clock, color: "bg-amber-500" },
-          { title: "Overdue", value: "₹26,600", change: "+1", icon: AlertTriangle, color: "bg-red-500" },
-        ].map(c => <KPICard key={c.title} {...c} />)}
+        {(() => {
+          const totalInvoiced = invoicesList.reduce((s, i) => s + (i.amount_num || parsePriceNum(i.amount)), 0);
+          const totalPaid = invoicesList.filter(i => i.status === "Paid").reduce((s, i) => s + (i.amount_num || parsePriceNum(i.amount)), 0);
+          const totalPending = invoicesList.filter(i => i.status === "Pending").reduce((s, i) => s + (i.amount_num || parsePriceNum(i.amount)), 0);
+          const totalOverdue = invoicesList.filter(i => i.status === "Overdue").reduce((s, i) => s + (i.amount_num || parsePriceNum(i.amount)), 0);
+          return [
+            { title: "Total Invoiced", value: `₹${totalInvoiced.toLocaleString("en-IN")}`, change: `${invoicesList.length} total`, icon: FileText, color: "bg-indigo-500" },
+            { title: "Paid", value: `₹${totalPaid.toLocaleString("en-IN")}`, change: `${invoicesList.filter(i => i.status === "Paid").length} paid`, icon: CheckCircle, color: "bg-emerald-500" },
+            { title: "Pending", value: `₹${totalPending.toLocaleString("en-IN")}`, change: `${invoicesList.filter(i => i.status === "Pending").length} pending`, icon: Clock, color: "bg-amber-500" },
+            { title: "Overdue", value: `₹${totalOverdue.toLocaleString("en-IN")}`, change: `${invoicesList.filter(i => i.status === "Overdue").length} overdue`, icon: AlertTriangle, color: "bg-red-500" },
+          ];
+        })().map(c => <KPICard key={c.title} {...c} />)}
       </div>
 
       <div className="flex gap-5">
@@ -3562,23 +3540,36 @@ function InvoicesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
-                {filtered.map(inv => (
-                  <tr key={inv.id} className="hover:bg-slate-50 cursor-pointer transition-colors" onClick={() => setPreview(preview?.id === inv.id ? null : inv)}>
-                    <td className="px-5 py-3.5 text-sm font-mono font-medium text-indigo-600">{inv.id}</td>
-                    <td className="px-5 py-3.5 text-sm text-slate-700">{inv.client}</td>
-                    <td className="px-5 py-3.5 text-sm font-bold text-slate-800">{inv.amount}</td>
-                    <td className="px-5 py-3.5 text-sm text-slate-500">{inv.issued}</td>
-                    <td className="px-5 py-3.5 text-sm text-slate-500">{inv.due}</td>
-                    <td className="px-5 py-3.5"><StatusBadge status={inv.status} /></td>
-                    <td className="px-5 py-3.5">
-                      <div className="flex items-center gap-1">
-                        <button onClick={(e) => { e.stopPropagation(); setPreview(inv); }} className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600" title="View"><Eye size={13} /></button>
-                        <button onClick={(e) => { e.stopPropagation(); alert(`Downloading PDF for ${inv.id}`); }} className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600" title="Download"><Download size={13} /></button>
-                        <button onClick={(e) => handleDeleteInvoice(inv.id, e)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500" title="Delete"><Trash2 size={13} /></button>
-                      </div>
+                {filtered.length > 0 ? (
+                  filtered.map(inv => (
+                    <tr key={inv.id} className="hover:bg-slate-50 cursor-pointer transition-colors" onClick={() => setPreview(preview?.id === inv.id ? null : inv)}>
+                      <td className="px-5 py-3.5 text-sm font-mono font-medium text-indigo-600">{inv.id}</td>
+                      <td className="px-5 py-3.5 text-sm text-slate-700">{inv.client}</td>
+                      <td className="px-5 py-3.5 text-sm font-bold text-slate-800">{inv.amount}</td>
+                      <td className="px-5 py-3.5 text-sm text-slate-500">{inv.issued}</td>
+                      <td className="px-5 py-3.5 text-sm text-slate-500">{inv.due}</td>
+                      <td className="px-5 py-3.5"><StatusBadge status={inv.status} /></td>
+                      <td className="px-5 py-3.5">
+                        <div className="flex items-center gap-1">
+                          <button onClick={(e) => { e.stopPropagation(); setPreview(inv); }} className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600" title="View"><Eye size={13} /></button>
+                          <button onClick={(e) => { e.stopPropagation(); alert(`Downloading PDF for ${inv.id}`); }} className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600" title="Download"><Download size={13} /></button>
+                          <button onClick={(e) => handleDeleteInvoice(inv.id, e)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500" title="Delete"><Trash2 size={13} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={7} className="px-5 py-12 text-center text-slate-400">
+                      <FileText size={32} className="mx-auto mb-2 text-slate-300" />
+                      <p className="text-sm font-medium text-slate-600">No invoices found</p>
+                      <p className="text-xs text-slate-400 mt-1">Generate an invoice to bill customers.</p>
+                      <button onClick={openCreateModal} className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-semibold hover:bg-indigo-700 transition-colors shadow-sm">
+                        <Plus size={14} /> New Invoice
+                      </button>
                     </td>
                   </tr>
-                ))}
+                )}
               </tbody>
             </table>
           </div>
@@ -3914,7 +3905,7 @@ function InvoicesPage() {
 // ─── Employee Management ──────────────────────────────────────────────────────
 
 function EmployeesPage() {
-  const [employeesList, setEmployeesList] = useState<Employee[]>(fallbackEmployees);
+  const [employeesList, setEmployeesList] = useState<Employee[]>([]);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Employee | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -4023,8 +4014,9 @@ function EmployeesPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {filtered.map(e => (
-                <tr key={e.id} onClick={() => setSelected(selected?.id === e.id ? null : e)} className={`hover:bg-slate-50 transition-colors cursor-pointer ${selected?.id === e.id ? "bg-indigo-50/50" : ""}`}>
+              {filtered.length > 0 ? (
+                filtered.map(e => (
+                  <tr key={e.id} onClick={() => setSelected(selected?.id === e.id ? null : e)} className={`hover:bg-slate-50 transition-colors cursor-pointer ${selected?.id === e.id ? "bg-indigo-50/50" : ""}`}>
                   <td className="px-5 py-3.5">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-300 to-violet-400 flex items-center justify-center text-white text-xs font-bold shrink-0">
@@ -4064,7 +4056,19 @@ function EmployeesPage() {
                     </div>
                   </td>
                 </tr>
-              ))}
+              ))
+            ) : (
+              <tr>
+                <td colSpan={8} className="px-5 py-12 text-center text-slate-400">
+                  <UserCheck size={32} className="mx-auto mb-2 text-slate-300" />
+                  <p className="text-sm font-medium text-slate-600">No employees listed</p>
+                  <p className="text-xs text-slate-400 mt-1">Onboard employees to track attendance and team performance.</p>
+                  <button onClick={openAddModal} className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-semibold hover:bg-indigo-700 transition-colors shadow-sm">
+                    <Plus size={14} /> Add Employee
+                  </button>
+                </td>
+              </tr>
+            )}
             </tbody>
           </table>
         </div>
@@ -4383,18 +4387,7 @@ function ProfitAnalyzerPage() {
   }, []);
 
   const rows = useMemo(() => {
-    const list = productsData.length > 0 ? productsData : [
-      { id: 1, name: "Enterprise Suite Pro", category: "Software License", buy: 18500, sell: 26000, qty: 32 },
-      { id: 2, name: "Cloud Storage 1TB", category: "Cloud Service", buy: 320, sell: 799, qty: 850 },
-      { id: 3, name: "API Access Tokens", category: "Developer Services", buy: 40, sell: 149, qty: 2300 },
-      { id: 4, name: "Analytics Dashboard Prem.", category: "Business Intelligence", buy: 1800, sell: 3499, qty: 210 },
-      { id: 5, name: "Training Credits", category: "AI Learning Credits", buy: 450, sell: 950, qty: 720 },
-      { id: 6, name: "Business Automation Pack", category: "Enterprise Software", buy: 2900, sell: 5499, qty: 125 },
-      { id: 7, name: "Workflow AI Assistant", category: "AI Subscription", buy: 1250, sell: 2499, qty: 410 },
-      { id: 8, name: "CRM Integration Suite", category: "Business Integration", buy: 3200, sell: 6499, qty: 95 },
-      { id: 9, name: "Email Automation Pro", category: "Marketing Automation", buy: 650, sell: 1499, qty: 520 },
-      { id: 10, name: "Document AI Processing", category: "AI Document Service", buy: 180, sell: 499, qty: 1450 },
-    ];
+    const list = productsData;
 
     return list.map(p => {
       const revenue = p.sell * p.qty;
@@ -4650,7 +4643,13 @@ function ProfitAnalyzerPage() {
 
 function NotificationsPage() {
   const [filter, setFilter] = useState("All");
-  const [items, setItems] = useState(notifications);
+  const [items, setItems] = useState<any[]>([]);
+
+  useEffect(() => {
+    api.getNotifications()
+      .then(data => setItems(data || []))
+      .catch(() => setItems([]));
+  }, []);
   const typeIcon: Record<string, any> = { ai: Bot, inventory: Package, payment: CreditCard, customer: Users, revenue: TrendingUp, employee: UserCheck };
   const typeColor: Record<string, string> = { ai: "bg-indigo-100 text-indigo-600", inventory: "bg-amber-100 text-amber-600", payment: "bg-red-100 text-red-600", customer: "bg-violet-100 text-violet-600", revenue: "bg-emerald-100 text-emerald-600", employee: "bg-blue-100 text-blue-600" };
   const filters = ["All", "AI", "Inventory", "Customer", "Payment", "Revenue", "Employee"];
@@ -4663,7 +4662,12 @@ function NotificationsPage() {
             <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-colors ${filter === f ? "bg-indigo-500 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>{f}</button>
           ))}
         </div>
-        <button onClick={() => setItems(items.map(i => ({ ...i, read: true })))} className="text-xs text-indigo-600 hover:text-indigo-700 font-medium">
+        <button onClick={async () => {
+          try {
+            await api.markAllNotificationsRead();
+            setItems(items.map(i => ({ ...i, read: true })));
+          } catch {}
+        }} className="text-xs text-indigo-600 hover:text-indigo-700 font-medium">
           Mark all read
         </button>
       </div>
@@ -4671,7 +4675,12 @@ function NotificationsPage() {
         {filtered.map(n => {
           const Icon = typeIcon[n.type] || Bell;
           return (
-            <div key={n.id} onClick={() => setItems(items.map(i => i.id === n.id ? { ...i, read: true } : i))} className={`bg-white rounded-2xl p-4 border shadow-sm cursor-pointer hover:shadow-md transition-all ${n.read ? "border-slate-100" : "border-indigo-100 shadow-indigo-50"}`}>
+            <div key={n.id} onClick={async () => {
+              try {
+                await api.markNotificationRead(n.id);
+                setItems(items.map(i => i.id === n.id ? { ...i, read: true } : i));
+              } catch {}
+            }} className={`bg-white rounded-2xl p-4 border shadow-sm cursor-pointer hover:shadow-md transition-all ${n.read ? "border-slate-100" : "border-indigo-100 shadow-indigo-50"}`}>
               <div className="flex items-start gap-4">
                 <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${typeColor[n.type]}`}>
                   <Icon size={16} />
