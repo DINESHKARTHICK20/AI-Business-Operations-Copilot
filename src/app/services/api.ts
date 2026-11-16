@@ -586,6 +586,31 @@ export const api = {
   },
 
   // Authentication & Users
+  async getSmtpStatus(): Promise<{ configured: boolean; host: string; port: number; from_name: string; from_email: string; user: string; missing_variables: string[] }> {
+    return request("/api/auth/signup/smtp-status");
+  },
+
+  async signupSendOtp(data: { name: string; email: string; password: string; company?: string; biz_type?: string }): Promise<{ status: string; message: string; email: string; cooldown_seconds: number; expires_in_seconds: number }> {
+    return request("/api/auth/signup/send-otp", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
+  async signupResendOtp(data: { email: string }): Promise<{ status: string; message: string; email: string; cooldown_seconds: number; expires_in_seconds: number }> {
+    return request("/api/auth/signup/resend-otp", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
+  async signupVerifyOtp(data: { email: string; otp: string }): Promise<{ status: string; message: string; email: string }> {
+    return request("/api/auth/signup/verify-otp", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
   async registerUser(data: { name: string; email: string; password?: string; company?: string; biz_type?: string }): Promise<AuthResponse> {
     return request<AuthResponse>("/api/auth/register", {
       method: "POST",

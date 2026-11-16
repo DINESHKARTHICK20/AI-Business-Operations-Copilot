@@ -1,23 +1,17 @@
 import sqlite3
-from pathlib import Path
+import os
 
-db_path = Path("backend/ai_bizops.db")
-print("DB exists:", db_path.exists())
-
-conn = sqlite3.connect(str(db_path))
-cursor = conn.cursor()
-
-cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-tables = [row[0] for row in cursor.fetchall()]
-print("Tables in DB:", tables)
-
-for t in tables:
-    cursor.execute(f"PRAGMA table_info({t})")
-    cols = cursor.fetchall()
-    cursor.execute(f"SELECT COUNT(*) FROM {t}")
-    cnt = cursor.fetchone()[0]
-    print(f"Table '{t}' ({cnt} rows):")
-    for c in cols:
-        print(f"  - col {c[0]}: {c[1]} ({c[2]})")
-
-conn.close()
+db_path = 'backend/ai_bizops.db'
+if not os.path.exists(db_path):
+    print("Database file not found at", db_path)
+else:
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = [row[0] for row in cur.fetchall()]
+    print("Tables:", tables)
+    for t in tables:
+        cur.execute(f"PRAGMA table_info({t});")
+        cols = cur.fetchall()
+        print(f"Table {t} columns:", [(c[1], c[2]) for c in cols])
+    conn.close()
