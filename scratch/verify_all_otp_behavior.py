@@ -182,3 +182,4 @@ with patch.object(ai_backend, "dispatch_otp_email", side_effect=mock_send):
 print("\n" + "=" * 70)
 print("ALL TESTS PASSED SUCCESSFULLY! ZERO ERRORS.")
 print("=" * 70)
+
