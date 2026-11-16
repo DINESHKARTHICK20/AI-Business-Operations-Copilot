@@ -9,10 +9,6 @@ import json
 import hashlib
 import hmac
 import secrets
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.utils import formataddr
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
@@ -21,18 +17,6 @@ import bcrypt
 import joblib
 import pandas as pd
 from dotenv import load_dotenv
-try:
-    from email_service import (
-        send_resend_otp_email,
-        is_resend_configured,
-        get_email_service_status
-    )
-except ImportError:
-    from backend.email_service import (
-        send_resend_otp_email,
-        is_resend_configured,
-        get_email_service_status
-    )
 
 # Load environment variables from .env
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -75,257 +59,6 @@ else:
         "http://localhost:8000",
         "http://127.0.0.1:8000"
     ]
-
-# ─── Resend SMTP Email Delivery Configuration ─────────────────────────
-SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.resend.com").strip() or "smtp.resend.com"
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "465").strip() or "465")
-SMTP_USER = os.environ.get("SMTP_USER", "resend").strip() or "resend"
-# The SMTP password is the user's Resend API key (starts with 're_')
-SMTP_PASSWORD = (
-    os.environ.get("SMTP_PASSWORD", "").strip()
-    or os.environ.get("RESEND_API_KEY", "").strip()
-    or os.environ.get("SMTP_APP_PASSWORD", "").strip()
-)
-SMTP_FROM = (
-    os.environ.get("SMTP_FROM", "onboarding@resend.dev").strip()
-    or os.environ.get("RESEND_FROM_EMAIL", "").strip()
-    or "onboarding@resend.dev"
-)
-SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "AI Business Operations Copilot").strip()
-SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "false").strip().lower() in ("true", "1", "yes")
-SMTP_USE_SSL = os.environ.get("SMTP_USE_SSL", "true").strip().lower() in ("true", "1", "yes")
-SMTP_TIMEOUT = int(os.environ.get("SMTP_TIMEOUT", "20").strip() or "20")
-
-# ─── Resend Testing Restrictions (Without Custom Domain) ─────────────
-# In testing mode without a custom domain, Resend requires onboarding@resend.dev
-# to only send to the Gmail address registered with your Resend account.
-RESEND_TEST_RECIPIENT = os.environ.get("RESEND_TEST_RECIPIENT", "").strip().lower()
-
-def mask_email(email_addr: str) -> str:
-    """Return masked email like k***@domain.com"""
-    if not email_addr or "@" not in email_addr:
-        return email_addr or ""
-    parts = email_addr.split("@")
-    user, domain = parts[0], parts[1]
-    if len(user) <= 2:
-        masked_user = user[0] + "***"
-    else:
-        masked_user = user[:2] + "***" + user[-1]
-    return f"{masked_user}@{domain}"
-
-def validate_testing_recipient(email_addr: str):
-    """
-    Enforces Resend testing restrictions when RESEND_TEST_RECIPIENT is configured.
-    Rejects attempts to send OTPs to any other address with a clear, helpful message.
-    """
-    if not RESEND_TEST_RECIPIENT:
-        return
-    clean = (email_addr or "").strip().lower()
-    if clean != RESEND_TEST_RECIPIENT:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"Resend testing mode is active. Without a verified custom domain, OTP emails can only be sent to "
-                f"your registered Resend account address ({mask_email(RESEND_TEST_RECIPIENT)}). "
-                f"Please enter your registered Gmail address or update RESEND_TEST_RECIPIENT in .env."
-            )
-        )
-
-def get_smtp_status_dict() -> Dict[str, Any]:
-    """Check Resend SMTP configuration status without exposing sensitive credentials."""
-    missing = []
-    if not SMTP_HOST:
-        missing.append("SMTP_HOST")
-    if not SMTP_PORT:
-        missing.append("SMTP_PORT")
-    if not SMTP_PASSWORD:
-        missing.append("SMTP_PASSWORD (Resend API Key)")
-
-    configured = bool(SMTP_HOST and SMTP_PORT and SMTP_PASSWORD)
-    masked_user = mask_email(SMTP_USER) if "@" in SMTP_USER else SMTP_USER
-
-    return {
-        "configured": configured,
-        "provider": "resend_smtp",
-        "host": SMTP_HOST or "Not configured",
-        "port": SMTP_PORT,
-        "from_name": SMTP_FROM_NAME,
-        "from_email": SMTP_FROM,
-        "user": masked_user,
-        "use_tls": SMTP_USE_TLS,
-        "use_ssl": SMTP_USE_SSL,
-        "timeout": SMTP_TIMEOUT,
-        "testing_mode": bool(RESEND_TEST_RECIPIENT),
-        "permitted_test_recipient": mask_email(RESEND_TEST_RECIPIENT) if RESEND_TEST_RECIPIENT else "Any (No test restriction)",
-        "missing_variables": missing
-    }
-
-def is_smtp_configured() -> bool:
-    """Check if Resend SMTP is configured with host, port, and password."""
-    return bool(SMTP_HOST and SMTP_PORT and SMTP_PASSWORD)
-
-def dispatch_otp_email(to_email: str, recipient_name: str, otp: str):
-    """
-    Dispatches OTP verification email via Resend SMTP.
-    """
-    return send_otp_email(to_email, recipient_name, otp)
-
-def send_otp_email(to_email: str, recipient_name: str, otp: str):
-    """
-    Delivers a cryptographically secure 6-digit OTP verification email via Resend SMTP.
-    Uses SSL on port 465 and connects with user 'resend' and password (Resend API Key).
-    Never logs or exposes the OTP or API keys.
-    """
-    if not SMTP_PASSWORD:
-        raise HTTPException(
-            status_code=503,
-            detail="Resend SMTP is not configured. Please set SMTP_PASSWORD (your Resend API key starting with 're_') in .env."
-        )
-
-    # Validate permitted recipient in testing mode
-    validate_testing_recipient(to_email)
-
-    msg = MIMEMultipart("alternative")
-    sender_name = SMTP_FROM_NAME or "AI Business Operations Copilot"
-    msg["From"] = formataddr((sender_name, SMTP_FROM))
-    msg["To"] = formataddr((recipient_name, to_email))
-    msg["Subject"] = f"Your AI BizOps Verification Code: {otp}"
-
-    # Plain text version
-    text_content = f"""Hello {recipient_name},
-
-Thank you for registering with AI Business Operations Copilot.
-
-Your 6-digit email verification code is: {otp}
-
-This code will expire in 5 minutes.
-For your security, never share this code with anyone.
-
-If you did not request this verification, please disregard this email.
-
-Best regards,
-The AI BizOps Team
-"""
-
-    # Professional styled HTML version matching UI design
-    html_content = f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Verification Code</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #f8fafc;">
-  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #0f172a; padding: 40px 16px;">
-    <tr>
-      <td align="center">
-        <table width="100%" max-width="500" border="0" cellspacing="0" cellpadding="0" style="max-width: 500px; background: #1e293b; border-radius: 16px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);">
-          <tr>
-            <td style="padding: 28px 28px 20px; text-align: center; border-bottom: 1px solid #334155; background: linear-gradient(135deg, rgba(79, 70, 229, 0.2), rgba(124, 58, 237, 0.2));">
-              <div style="display: inline-block; width: 42px; height: 42px; line-height: 42px; background: linear-gradient(135deg, #6366f1, #8b5cf6); border-radius: 10px; margin-bottom: 10px; text-align: center;">
-                <span style="font-size: 20px; color: #ffffff;">⚡</span>
-              </div>
-              <h1 style="margin: 0; font-size: 19px; font-weight: 700; color: #ffffff; letter-spacing: -0.02em;">AI Business Operations Copilot</h1>
-              <p style="margin: 4px 0 0; font-size: 12px; color: #94a3b8;">Email OTP Verification</p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding: 28px;">
-              <p style="margin: 0 0 14px; font-size: 14px; color: #e2e8f0; line-height: 1.5;">
-                Hello <strong style="color: #ffffff;">{recipient_name}</strong>,
-              </p>
-              <p style="margin: 0 0 20px; font-size: 13px; color: #94a3b8; line-height: 1.6;">
-                Thank you for creating an account. Please enter the verification code below to confirm your email and initialize your business workspace:
-              </p>
-              
-              <div style="background: #0f172a; border: 1px solid #4f46e5; border-radius: 12px; padding: 18px; text-align: center; margin: 20px 0;">
-                <div style="font-family: 'Courier New', Courier, monospace; font-size: 34px; font-weight: 800; letter-spacing: 8px; color: #818cf8; text-shadow: 0 0 10px rgba(129, 140, 248, 0.4);">
-                  {otp}
-                </div>
-              </div>
-
-              <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px; padding: 10px 14px; text-align: center; margin: 16px 0;">
-                <p style="margin: 0; font-size: 12px; color: #fca5a5;">
-                  ⏱️ <strong>Valid for 5 minutes</strong> • Never share this code with anyone.
-                </p>
-              </div>
-
-              <p style="margin: 20px 0 0; font-size: 11px; color: #64748b; line-height: 1.5;">
-                If you did not initiate this registration, please disregard this email. Your business workspace will not be created without verification.
-              </p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding: 16px 28px; background: #0f172a; border-top: 1px solid #334155; text-align: center;">
-              <p style="margin: 0; font-size: 11px; color: #64748b;">
-                © 2026 AI Business Operations Copilot. Powered by Resend SMTP.
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"""
-
-    msg.attach(MIMEText(text_content, "plain", "utf-8"))
-    msg.attach(MIMEText(html_content, "html", "utf-8"))
-
-    try:
-        if SMTP_USE_SSL:
-            # SSL connection on port 465 for Resend SMTP
-            server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT)
-        else:
-            server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT)
-            if SMTP_USE_TLS:
-                server.starttls()
-
-        if SMTP_USER and SMTP_PASSWORD:
-            server.login(SMTP_USER, SMTP_PASSWORD)
-
-        server.send_message(msg)
-        server.quit()
-        logger.info("Resend SMTP OTP email successfully sent to %s", mask_email(to_email))
-    except smtplib.SMTPAuthenticationError as auth_err:
-        logger.error("Resend SMTP Authentication Failed: %s", str(auth_err))
-        raise HTTPException(
-            status_code=502,
-            detail="Resend SMTP authentication failed. Please verify that SMTP_PASSWORD in .env is your valid Resend API key (starts with 're_')."
-        )
-    except smtplib.SMTPRecipientsRefused as rec_err:
-        logger.error("Resend SMTP Recipient Refused for %s: %s", mask_email(to_email), str(rec_err))
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"Resend rejected recipient '{mask_email(to_email)}'. In testing mode with 'onboarding@resend.dev', "
-                f"emails can only be delivered to your registered Resend account Gmail address. Please use your registered Gmail address."
-            )
-        )
-    except smtplib.SMTPSenderRefused as send_err:
-        logger.error("Resend SMTP Sender Refused for %s: %s", mask_email(SMTP_FROM), str(send_err))
-        raise HTTPException(
-            status_code=502,
-            detail=f"Resend rejected sender '{SMTP_FROM}'. For testing without a custom domain, use 'onboarding@resend.dev'."
-        )
-    except smtplib.SMTPConnectError as conn_err:
-        logger.error("Failed to connect to Resend SMTP server %s:%d: %s", SMTP_HOST, SMTP_PORT, str(conn_err))
-        raise HTTPException(
-            status_code=502,
-            detail=f"Unable to connect to Resend SMTP server ({SMTP_HOST}:{SMTP_PORT}). Please check your internet connection."
-        )
-    except smtplib.SMTPException as smtp_err:
-        logger.error("Resend SMTP delivery error for %s: %s", mask_email(to_email), str(smtp_err))
-        raise HTTPException(
-            status_code=502,
-            detail=f"Resend SMTP delivery error: {str(smtp_err)}"
-        )
-    except Exception as e:
-        logger.error("Failed to send OTP email to %s: %s", mask_email(to_email), str(e))
-        raise HTTPException(
-            status_code=502,
-            detail=f"Failed to deliver verification email: {str(e)}. Please check your Resend SMTP settings in .env."
-        )
 
 
 # ============================================================
@@ -587,24 +320,11 @@ def init_db():
     if "is_verified" not in user_cols and len(user_cols) > 0:
         cursor.execute("ALTER TABLE users ADD COLUMN is_verified INTEGER DEFAULT 1")
 
-    # Pending Registrations Table for Email OTP Verification
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS pending_registrations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        email TEXT UNIQUE NOT NULL,
-        name TEXT NOT NULL,
-        company TEXT DEFAULT '',
-        biz_type TEXT DEFAULT '',
-        password_hash TEXT NOT NULL,
-        otp_hash TEXT NOT NULL,
-        otp_salt TEXT NOT NULL,
-        attempts INTEGER DEFAULT 0,
-        created_at TEXT NOT NULL,
-        expires_at TEXT NOT NULL,
-        last_sent_at TEXT NOT NULL
-    )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pending_registrations_email ON pending_registrations(email);")
+    # Drop obsolete pending_registrations table (OTP verification removed)
+    try:
+        cursor.execute("DROP TABLE IF EXISTS pending_registrations")
+    except Exception:
+        pass
 
     # Sync password_hash from legacy password column if password_hash is empty
     try:
@@ -1139,23 +859,6 @@ class UserRegisterRequest(BaseModel):
     biz_type: Optional[str] = ""
 
 
-class SignupSendOtpRequest(BaseModel):
-    name: str
-    email: str
-    password: str
-    company: Optional[str] = ""
-    biz_type: Optional[str] = ""
-
-
-class SignupResendOtpRequest(BaseModel):
-    email: str
-
-
-class SignupVerifyOtpRequest(BaseModel):
-    email: str
-    otp: str
-
-
 class UserLoginRequest(BaseModel):
     email: str
     password: Optional[str] = ""
@@ -1277,6 +980,45 @@ class LoginRateLimiter:
 
 
 login_limiter = LoginRateLimiter(max_attempts_per_key=5, max_attempts_per_ip=20, window_seconds=300)
+
+
+class SignupRateLimiter:
+    """In-memory rate limiter tracking signup attempts per IP to prevent registration flooding."""
+    def __init__(self, max_attempts_per_ip: int = 15, window_seconds: int = 300):
+        self.max_attempts_per_ip = max_attempts_per_ip
+        self.window_seconds = window_seconds
+        self.attempts: Dict[str, List[float]] = {}
+
+    def _clean(self, ip: str, now: float):
+        if ip in self.attempts:
+            self.attempts[ip] = [t for t in self.attempts[ip] if now - t < self.window_seconds]
+            if not self.attempts[ip]:
+                del self.attempts[ip]
+
+    def is_rate_limited(self, ip: str) -> bool:
+        now = time.time()
+        self._clean(ip, now)
+        return len(self.attempts.get(ip, [])) >= self.max_attempts_per_ip
+
+    def record_attempt(self, ip: str):
+        now = time.time()
+        self._clean(ip, now)
+        if ip not in self.attempts:
+            self.attempts[ip] = []
+        self.attempts[ip].append(now)
+
+    def get_remaining_seconds(self, ip: str) -> int:
+        now = time.time()
+        self._clean(ip, now)
+        timestamps = self.attempts.get(ip, [])
+        if not timestamps:
+            return 0
+        oldest = min(timestamps)
+        remaining = self.window_seconds - (now - oldest)
+        return max(0, int(remaining))
+
+
+signup_limiter = SignupRateLimiter(max_attempts_per_ip=15, window_seconds=300)
 
 
 def generate_csrf_token() -> str:
@@ -1444,359 +1186,25 @@ def get_rate_limit_status(request: Request, email: Optional[str] = Query(default
     return result
 
 
-@app.get("/api/auth/signup/smtp-status")
-@app.get("/api/auth/signup/smtp-status/")
-def get_signup_smtp_status():
-    """Report email delivery configuration status without leaking secrets."""
-    resend_stat = get_email_service_status()
-    smtp_stat = get_smtp_status_dict()
-    is_cfg = resend_stat["configured"] or smtp_stat["configured"]
-    primary = "resend_smtp" if smtp_stat["configured"] else ("resend" if resend_stat["configured"] else "resend_smtp")
-    return {
-        "status": "success",
-        "provider": primary,
-        "configured": is_cfg,
-        "host": smtp_stat.get("host"),
-        "port": smtp_stat.get("port"),
-        "resend": resend_stat,
-        "smtp": smtp_stat
-    }
-
-
-@app.post("/api/auth/signup/send-otp")
-@app.post("/api/auth/signup/send-otp/")
-def signup_send_otp(req: SignupSendOtpRequest):
-    """
-    Initiates Sign Up by generating a 6-digit cryptographic OTP,
-    storing the pending registration securely (hashed password & hashed OTP),
-    and dispatching the OTP to the user's email via SMTP.
-    """
-    clean_name = (req.name or "").strip()
-    clean_email = (req.email or "").strip().lower()
-    raw_password = req.password or ""
-    clean_company = (req.company or "").strip() or f"{clean_name}'s Business"
-    clean_biz = (req.biz_type or "").strip() or "General Business"
-
-    if not clean_name:
-        raise HTTPException(status_code=400, detail="Name is required.")
-    if not clean_email or not EMAIL_REGEX.match(clean_email):
-        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
-    if not raw_password or len(raw_password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
-
-    # Validate test recipient restriction if testing mode is active
-    validate_testing_recipient(clean_email)
-
-    conn = get_db()
-    cursor = conn.cursor()
-    try:
-        # Check if email is already registered in active accounts
-        cursor.execute("SELECT id FROM users WHERE LOWER(email) = LOWER(?)", (clean_email,))
-        existing = cursor.fetchone()
-        if existing:
-            raise HTTPException(status_code=400, detail="An account with this email already exists. Please sign in.")
-
-        # Check existing pending registration and cooldown
-        cursor.execute("SELECT id, last_sent_at, attempts FROM pending_registrations WHERE email = ?", (clean_email,))
-        pending = cursor.fetchone()
-        now = datetime.now()
-        now_str = now.strftime("%Y-%m-%d %H:%M:%S")
-
-        if pending:
-            last_sent_str = pending["last_sent_at"]
-            try:
-                last_sent = datetime.strptime(last_sent_str, "%Y-%m-%d %H:%M:%S")
-                elapsed = (now - last_sent).total_seconds()
-                if elapsed < 60:
-                    cooldown_remaining = max(1, 60 - int(elapsed))
-                    raise HTTPException(
-                        status_code=429,
-                        detail=f"Please wait {cooldown_remaining} seconds before requesting a new verification code."
-                    )
-            except ValueError:
-                pass
-
-        # Generate cryptographically secure 6-digit OTP
-        otp = f"{secrets.randbelow(900000) + 100000:06d}"
-        otp_salt = secrets.token_hex(16)
-        otp_hash = hashlib.sha256(f"{otp_salt}:{otp}".encode()).hexdigest()
-        expires_at_str = (now + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
-
-        # Hash password securely with bcrypt
-        hashed_pw = hash_password(raw_password)
-
-        # Dispatch OTP verification email via Resend (or fallback to SMTP) before writing to DB
-        dispatch_otp_email(clean_email, clean_name, otp)
-
-        if pending:
-            cursor.execute("""
-            UPDATE pending_registrations
-            SET name = ?, company = ?, biz_type = ?, password_hash = ?, otp_hash = ?, otp_salt = ?, attempts = 0, expires_at = ?, last_sent_at = ?
-            WHERE email = ?
-            """, (clean_name, clean_company, clean_biz, hashed_pw, otp_hash, otp_salt, expires_at_str, now_str, clean_email))
-        else:
-            cursor.execute("""
-            INSERT INTO pending_registrations (email, name, company, biz_type, password_hash, otp_hash, otp_salt, attempts, created_at, expires_at, last_sent_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-            """, (clean_email, clean_name, clean_company, clean_biz, hashed_pw, otp_hash, otp_salt, now_str, expires_at_str, now_str))
-
-        conn.commit()
-    except HTTPException:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        raise
-    except Exception as e:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        logger.error("Error in signup_send_otp for %s: %s", mask_email(clean_email), e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to process verification request. Please try again.")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-    return {
-        "status": "success",
-        "message": "Verification code has been sent to your email address.",
-        "email": mask_email(clean_email),
-        "cooldown_seconds": 60,
-        "expires_in_seconds": 300
-    }
-
-
-@app.post("/api/auth/signup/resend-otp")
-@app.post("/api/auth/signup/resend-otp/")
-def signup_resend_otp(req: SignupResendOtpRequest):
-    """
-    Resends a fresh 6-digit OTP to a pending registration,
-    enforcing a 60-second cooldown and invalidating the previous OTP.
-    """
-    clean_email = (req.email or "").strip().lower()
-    if not clean_email or not EMAIL_REGEX.match(clean_email):
-        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
-
-    # Validate test recipient restriction if testing mode is active
-    validate_testing_recipient(clean_email)
-
-    conn = get_db()
-    cursor = conn.cursor()
-    try:
-        # Check if already registered
-        cursor.execute("SELECT id FROM users WHERE LOWER(email) = LOWER(?)", (clean_email,))
-        if cursor.fetchone():
-            raise HTTPException(status_code=400, detail="An account with this email already exists. Please sign in.")
-
-        cursor.execute("SELECT * FROM pending_registrations WHERE email = ?", (clean_email,))
-        pending = cursor.fetchone()
-        if not pending:
-            raise HTTPException(status_code=404, detail="No pending registration found for this email. Please fill out the sign up form.")
-
-        now = datetime.now()
-        last_sent_str = pending["last_sent_at"]
-        try:
-            last_sent = datetime.strptime(last_sent_str, "%Y-%m-%d %H:%M:%S")
-            elapsed = (now - last_sent).total_seconds()
-            if elapsed < 60:
-                cooldown_remaining = max(1, 60 - int(elapsed))
-                raise HTTPException(
-                    status_code=429,
-                    detail=f"Please wait {cooldown_remaining} seconds before requesting a new code."
-                )
-        except ValueError:
-            pass
-
-        # Generate new OTP (invalidating previous)
-        otp = f"{secrets.randbelow(900000) + 100000:06d}"
-        otp_salt = secrets.token_hex(16)
-        otp_hash = hashlib.sha256(f"{otp_salt}:{otp}".encode()).hexdigest()
-        expires_at_str = (now + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
-        now_str = now.strftime("%Y-%m-%d %H:%M:%S")
-
-        # Dispatch fresh OTP verification email via Resend (or fallback to SMTP)
-        dispatch_otp_email(clean_email, pending["name"], otp)
-
-        cursor.execute("""
-        UPDATE pending_registrations
-        SET otp_hash = ?, otp_salt = ?, attempts = 0, expires_at = ?, last_sent_at = ?
-        WHERE email = ?
-        """, (otp_hash, otp_salt, expires_at_str, now_str, clean_email))
-
-        conn.commit()
-    except HTTPException:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        raise
-    except Exception as e:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        logger.error("Error in signup_resend_otp for %s: %s", mask_email(clean_email), e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to resend verification code. Please try again.")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-    return {
-        "status": "success",
-        "message": "A new verification code has been sent to your email.",
-        "email": mask_email(clean_email),
-        "cooldown_seconds": 60,
-        "expires_in_seconds": 300
-    }
-
-
-@app.post("/api/auth/signup/verify-otp")
-@app.post("/api/auth/signup/verify-otp/")
-def signup_verify_otp(req: SignupVerifyOtpRequest):
-    """
-    Verifies the 6-digit OTP.
-    Upon successful verification:
-      1. Creates user account in `users` table.
-      2. Marks email as verified (`is_verified = 1`).
-      3. Initializes private business workspace.
-      4. Atomically deletes pending registration to prevent reuse.
-    """
-    clean_email = (req.email or "").strip().lower()
-    clean_otp = (req.otp or "").strip()
-
-    if not clean_email or not EMAIL_REGEX.match(clean_email):
-        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
-    if not clean_otp or len(clean_otp) != 6 or not clean_otp.isdigit():
-        raise HTTPException(status_code=400, detail="Please enter a valid 6-digit verification code.")
-
-    conn = get_db()
-    cursor = conn.cursor()
-    try:
-        # Check if already registered
-        cursor.execute("SELECT id FROM users WHERE LOWER(email) = LOWER(?)", (clean_email,))
-        if cursor.fetchone():
-            cursor.execute("DELETE FROM pending_registrations WHERE email = ?", (clean_email,))
-            conn.commit()
-            raise HTTPException(status_code=400, detail="This account has already been registered and verified. Please sign in.")
-
-        cursor.execute("SELECT * FROM pending_registrations WHERE email = ?", (clean_email,))
-        pending = cursor.fetchone()
-        if not pending:
-            raise HTTPException(status_code=400, detail="No pending registration found for this email. Please sign up again.")
-
-        # Check maximum attempts (max 5)
-        current_attempts = pending["attempts"] or 0
-        if current_attempts >= 5:
-            cursor.execute("DELETE FROM pending_registrations WHERE email = ?", (clean_email,))
-            conn.commit()
-            raise HTTPException(
-                status_code=400,
-                detail="Too many incorrect attempts (5/5). This verification code has been invalidated. Please sign up again."
-            )
-
-        # Check expiration (5 minutes)
-        now = datetime.now()
-        expires_at_str = pending["expires_at"]
-        try:
-            expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
-            if now > expires_at:
-                cursor.execute("DELETE FROM pending_registrations WHERE email = ?", (clean_email,))
-                conn.commit()
-                raise HTTPException(
-                    status_code=400,
-                    detail="Verification code has expired. Please request a new verification code."
-                )
-        except ValueError:
-            pass
-
-        # Verify OTP using constant-time comparison
-        salt = pending["otp_salt"]
-        stored_hash = pending["otp_hash"]
-        computed_hash = hashlib.sha256(f"{salt}:{clean_otp}".encode()).hexdigest()
-
-        if not hmac.compare_digest(computed_hash, stored_hash):
-            new_attempts = current_attempts + 1
-            if new_attempts >= 5:
-                cursor.execute("DELETE FROM pending_registrations WHERE email = ?", (clean_email,))
-                conn.commit()
-                raise HTTPException(
-                    status_code=400,
-                    detail="Too many incorrect attempts (5/5). This code has been invalidated. Please request a new code."
-                )
-            else:
-                cursor.execute("UPDATE pending_registrations SET attempts = ? WHERE email = ?", (new_attempts, clean_email))
-                conn.commit()
-                remaining = 5 - new_attempts
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid verification code. {remaining} attempt{'s' if remaining != 1 else ''} remaining."
-                )
-
-        # ─── OTP is valid: Create user account & initialize workspace ─────────
-        now_str = now.strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("""
-        INSERT INTO users (name, email, password_hash, password, company, biz_type, created_at, updated_at, is_active, is_verified)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
-        """, (
-            pending["name"],
-            clean_email,
-            pending["password_hash"],
-            pending["password_hash"],
-            pending["company"],
-            pending["biz_type"],
-            now_str,
-            now_str
-        ))
-        user_id = cursor.lastrowid
-
-        # Initialize private workspace
-        log_activity(conn, user_id, "UserCheck", "Business workspace initialized.", "setup", "text-indigo-500")
-        add_notification(conn, user_id, "ai", "Welcome to AI BizOps!", "Your private business workspace is ready. Email verified successfully.")
-
-        # Delete pending registration to prevent any reuse
-        cursor.execute("DELETE FROM pending_registrations WHERE email = ?", (clean_email,))
-
-        conn.commit()
-        logger.info("Successfully verified email and created account for %s (user_id=%d)", mask_email(clean_email), user_id)
-    except HTTPException:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        raise
-    except sqlite3.IntegrityError:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        raise HTTPException(status_code=400, detail="An account with this email already exists. Please sign in.")
-    except Exception as e:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        logger.error("Error in signup_verify_otp for %s: %s", mask_email(clean_email), e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to complete registration. Please try again.")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-    return {
-        "status": "success",
-        "message": "Email verified and account created successfully! You can now sign in with your password.",
-        "email": clean_email
-    }
-
-
 @app.post("/api/auth/register")
-def register_user(req: UserRegisterRequest, response: Response):
+@app.post("/api/auth/register/")
+@app.post("/api/auth/signup")
+@app.post("/api/auth/signup/")
+def register_user(req: UserRegisterRequest, request: Request, response: Response):
+    """
+    Registers a new user account directly into SQLite without email OTP verification.
+    Validates name, email, and password (>= 6 chars).
+    Ensures email uniqueness, securely hashes the password with bcrypt,
+    and initializes a clean private business workspace.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    if signup_limiter.is_rate_limited(client_ip):
+        wait_sec = signup_limiter.get_remaining_seconds(client_ip)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many registration attempts. Please try again in {max(1, wait_sec)} seconds."
+        )
+
     clean_name = (req.name or "").strip()
     clean_email = (req.email or "").strip().lower()
     raw_password = req.password or ""
@@ -1812,6 +1220,8 @@ def register_user(req: UserRegisterRequest, response: Response):
     if len(raw_password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
 
+    signup_limiter.record_attempt(client_ip)
+
     conn = get_db()
     cursor = conn.cursor()
     try:
@@ -1825,8 +1235,8 @@ def register_user(req: UserRegisterRequest, response: Response):
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         cursor.execute("""
-        INSERT INTO users (name, email, password_hash, password, company, biz_type, created_at, updated_at, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+        INSERT INTO users (name, email, password_hash, password, company, biz_type, created_at, updated_at, is_active, is_verified)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
         """, (clean_name, clean_email, hashed_pw, hashed_pw, clean_company, clean_biz, now_str, now_str))
         user_id = cursor.lastrowid
 
@@ -1873,7 +1283,7 @@ def register_user(req: UserRegisterRequest, response: Response):
 
     return {
         "status": "success",
-        "message": "Account created successfully. Please sign in.",
+        "message": "Account created successfully.",
         "user": {
             "id": user_id,
             "name": clean_name,

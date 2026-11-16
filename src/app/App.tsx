@@ -855,7 +855,6 @@ function SignUpPage({
   setPage: (p: Page) => void;
   onRegistered?: (email: string) => void;
 }) {
-  const [step, setStep] = useState<"form" | "otp">("form");
   const [fullName, setFullName] = useState("");
   const [company, setCompany] = useState("");
   const [bizType, setBizType] = useState("");
@@ -869,38 +868,9 @@ function SignUpPage({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // OTP Verification State
-  const [otp, setOtp] = useState<string[]>(["", "", "", "", "", ""]);
-  const [maskedEmail, setMaskedEmail] = useState("");
-  const [cooldown, setCooldown] = useState(0);
-  const [expiry, setExpiry] = useState(300);
-  const [verifying, setVerifying] = useState(false);
-  const [resending, setResending] = useState(false);
-  const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
-
   const businessTypes = ["Select business type", "E-commerce", "Retail", "SaaS", "Consulting", "Manufacturing", "Healthcare", "Food & Beverage", "Logistics", "Real Estate", "Other"];
 
-  // Countdown timers for cooldown and OTP expiry
-  useEffect(() => {
-    let timer: any;
-    if (step === "otp") {
-      timer = setInterval(() => {
-        setCooldown(prev => (prev > 0 ? prev - 1 : 0));
-        setExpiry(prev => (prev > 0 ? prev - 1 : 0));
-      }, 1000);
-    }
-    return () => {
-      if (timer) clearInterval(timer);
-    };
-  }, [step]);
-
-  const formatTimer = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-  };
-
-  const handleSendOtp = async (e?: React.FormEvent) => {
+  const handleRegister = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setErrorMsg(null);
     setSuccessMsg(null);
@@ -910,8 +880,12 @@ function SignUpPage({
     const cleanBiz = bizType.trim();
     const cleanEmail = email.trim().toLowerCase();
 
-    if (!cleanName || !cleanCompany || !cleanBiz || !cleanEmail || !password) {
-      setErrorMsg("Please fill in all required fields.");
+    if (!cleanName) {
+      setErrorMsg("Full name is required.");
+      return;
+    }
+    if (!cleanEmail) {
+      setErrorMsg("Email address is required.");
       return;
     }
 
@@ -921,16 +895,18 @@ function SignUpPage({
       return;
     }
 
+    if (!password) {
+      setErrorMsg("Password is required.");
+      return;
+    }
     if (password.length < 6) {
       setErrorMsg("Password must be at least 6 characters.");
       return;
     }
-
     if (password !== confirm) {
       setErrorMsg("Passwords do not match.");
       return;
     }
-
     if (!agreed) {
       setErrorMsg("You must agree to the Terms of Service.");
       return;
@@ -938,142 +914,43 @@ function SignUpPage({
 
     setLoading(true);
     try {
-      const res = await api.signupSendOtp({
+      const res = await api.registerUser({
         name: cleanName,
         email: cleanEmail,
         password,
-        company: cleanCompany,
-        biz_type: cleanBiz,
+        company: cleanCompany || `${cleanName}'s Business`,
+        biz_type: cleanBiz || "General Business",
       });
 
-      setMaskedEmail(res.email || cleanEmail);
-      setCooldown(res.cooldown_seconds || 60);
-      setExpiry(res.expires_in_seconds || 300);
-      setOtp(["", "", "", "", "", ""]);
-      setStep("otp");
-      setSuccessMsg("Verification code sent! Please check your email inbox.");
-      setTimeout(() => {
-        otpInputRefs.current[0]?.focus();
-      }, 100);
-    } catch (err: any) {
-      const msg = err?.message || "";
-      if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || err.name === "TypeError" || msg.includes("Unable to connect") || msg.includes("unreachable")) {
-        setErrorMsg("Unable to connect to the backend server. Please check your connection and try again.");
-      } else if (msg.includes("already exists")) {
-        setErrorMsg("An account with this email already exists. Please sign in.");
-      } else {
-        setErrorMsg(msg || "Failed to send verification code. Please try again.");
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleOtpChange = (index: number, val: string) => {
-    // Only accept numeric characters
-    const digitsOnly = val.replace(/\D/g, "");
-    if (!digitsOnly) {
-      const newOtp = [...otp];
-      newOtp[index] = "";
-      setOtp(newOtp);
-      return;
-    }
-
-    const newOtp = [...otp];
-    newOtp[index] = digitsOnly[digitsOnly.length - 1]; // take the last digit entered
-    setOtp(newOtp);
-    setErrorMsg(null);
-
-    // Auto advance to next input box
-    if (index < 5) {
-      otpInputRefs.current[index + 1]?.focus();
-    }
-  };
-
-  const handleOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Backspace" && !otp[index] && index > 0) {
-      otpInputRefs.current[index - 1]?.focus();
-    }
-  };
-
-  const handleOtpPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
-    e.preventDefault();
-    const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
-    if (!pasted) return;
-
-    const newOtp = [...otp];
-    for (let i = 0; i < 6; i++) {
-      newOtp[i] = pasted[i] || "";
-    }
-    setOtp(newOtp);
-    setErrorMsg(null);
-
-    const nextIdx = Math.min(pasted.length, 5);
-    otpInputRefs.current[nextIdx]?.focus();
-  };
-
-  const handleResendOtp = async () => {
-    if (cooldown > 0 || resending) return;
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    setResending(true);
-
-    try {
-      const cleanEmail = email.trim().toLowerCase();
-      const res = await api.signupResendOtp({ email: cleanEmail });
-      setCooldown(res.cooldown_seconds || 60);
-      setExpiry(res.expires_in_seconds || 300);
-      setOtp(["", "", "", "", "", ""]);
-      setSuccessMsg("A new verification code has been sent to your email.");
-      otpInputRefs.current[0]?.focus();
-    } catch (err: any) {
-      setErrorMsg(err?.message || "Failed to resend code. Please try again.");
-    } finally {
-      setResending(false);
-    }
-  };
-
-  const handleVerifyOtp = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const fullOtp = otp.join("");
-    if (fullOtp.length !== 6) {
-      setErrorMsg("Please enter the complete 6-digit verification code.");
-      return;
-    }
-
-    if (expiry <= 0) {
-      setErrorMsg("Verification code has expired. Please click resend to get a new code.");
-      return;
-    }
-
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    setVerifying(true);
-
-    const cleanEmail = email.trim().toLowerCase();
-
-    try {
-      const res = await api.signupVerifyOtp({
-        email: cleanEmail,
-        otp: fullOtp,
-      });
-
-      if (res?.status === "success") {
-        setSuccessMsg("Email verified successfully! Setting up your workspace and redirecting to sign in...");
+      if (res?.status === "success" || res?.user) {
+        setSuccessMsg("Account created successfully. Redirecting to sign in...");
         setTimeout(() => {
           if (onRegistered) {
             onRegistered(cleanEmail);
           } else {
             setPage("login");
           }
-        }, 1500);
+        }, 1200);
       } else {
-        setErrorMsg("Verification failed. Please try again.");
+        setErrorMsg("Failed to create account. Please try again.");
       }
     } catch (err: any) {
-      setErrorMsg(err?.message || "Invalid verification code. Please check and try again.");
+      const msg = err?.message || "";
+      if (
+        msg.includes("Failed to fetch") ||
+        msg.includes("NetworkError") ||
+        err.name === "TypeError" ||
+        msg.includes("Unable to connect") ||
+        msg.includes("unreachable")
+      ) {
+        setErrorMsg("Unable to connect to the backend server. Please check your connection and try again.");
+      } else if (msg.includes("already exists")) {
+        setErrorMsg("An account with this email already exists. Please sign in.");
+      } else {
+        setErrorMsg(msg || "Failed to create account. Please try again.");
+      }
     } finally {
-      setVerifying(false);
+      setLoading(false);
     }
   };
 
@@ -1093,14 +970,8 @@ function SignUpPage({
             </div>
             <span className="text-white font-bold text-xl tracking-tight">AI BizOps</span>
           </div>
-          <h1 className="text-2xl font-bold text-white mb-2">
-            {step === "form" ? "Create your account" : "Verify your email"}
-          </h1>
-          <p className="text-slate-400 text-sm">
-            {step === "form"
-              ? "Start automating your business operations in minutes"
-              : "Enter the 6-digit code sent to your email to activate your workspace"}
-          </p>
+          <h1 className="text-2xl font-bold text-white mb-2">Create your account</h1>
+          <p className="text-slate-400 text-sm">Start automating your business operations in minutes</p>
         </div>
 
         {/* Card */}
@@ -1119,240 +990,142 @@ function SignUpPage({
             </div>
           )}
 
-          {step === "form" ? (
-            /* STEP 1: Registration Form */
-            <form onSubmit={handleSendOtp} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">Full Name <span className="text-red-400">*</span></label>
-                  <input
-                    value={fullName}
-                    onChange={e => { setFullName(e.target.value); setErrorMsg(null); }}
-                    type="text"
-                    placeholder="Enter your full name"
-                    autoComplete="name"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">Company Name <span className="text-red-400">*</span></label>
-                  <input
-                    value={company}
-                    onChange={e => { setCompany(e.target.value); setErrorMsg(null); }}
-                    type="text"
-                    placeholder="Your company name"
-                    autoComplete="organization"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
-                  />
-                </div>
-              </div>
-
+          <form onSubmit={handleRegister} className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1.5">Business Type <span className="text-red-400">*</span></label>
-                <select
-                  value={bizType}
-                  onChange={e => { setBizType(e.target.value); setErrorMsg(null); }}
-                  className="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30 appearance-none text-white"
-                  style={{ color: bizType ? "#fff" : "#64748b" }}
-                >
-                  {businessTypes.map(t => (
-                    <option key={t} value={t === "Select business type" ? "" : t} className="text-slate-900 bg-white">
-                      {t}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1.5">Work Email <span className="text-red-400">*</span></label>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">Full Name <span className="text-red-400">*</span></label>
                 <input
-                  value={email}
-                  onChange={e => { setEmail(e.target.value); setErrorMsg(null); }}
-                  type="email"
-                  autoComplete="email"
-                  placeholder="you@company.com"
+                  value={fullName}
+                  onChange={e => { setFullName(e.target.value); setErrorMsg(null); }}
+                  type="text"
+                  placeholder="Enter your full name"
+                  autoComplete="name"
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
                 />
               </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">Password <span className="text-red-400">*</span></label>
-                  <div className="relative">
-                    <input
-                      value={password}
-                      onChange={e => { setPassword(e.target.value); setErrorMsg(null); }}
-                      type={showPassword ? "text" : "password"}
-                      autoComplete="new-password"
-                      placeholder="Min. 6 characters"
-                      className="w-full bg-white/5 border border-white/10 rounded-xl pl-4 pr-10 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors"
-                      tabIndex={-1}
-                      aria-label={showPassword ? "Hide password" : "Show password"}
-                    >
-                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">Confirm Password <span className="text-red-400">*</span></label>
-                  <div className="relative">
-                    <input
-                      value={confirm}
-                      onChange={e => { setConfirm(e.target.value); setErrorMsg(null); }}
-                      type={showConfirm ? "text" : "password"}
-                      autoComplete="new-password"
-                      placeholder="Repeat password"
-                      className={`w-full bg-white/5 border rounded-xl pl-4 pr-10 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${confirm && confirm !== password ? "border-red-500/50" : "border-white/10 focus:border-indigo-500/30"}`}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowConfirm(!showConfirm)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors"
-                      tabIndex={-1}
-                      aria-label={showConfirm ? "Hide password" : "Show password"}
-                    >
-                      {showConfirm ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                  </div>
-                  {confirm && confirm !== password && (
-                    <p className="text-xs text-red-400 mt-1">Passwords do not match</p>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex items-start gap-2.5 pt-1">
-                <input
-                  type="checkbox"
-                  id="agree"
-                  checked={agreed}
-                  onChange={e => { setAgreed(e.target.checked); setErrorMsg(null); }}
-                  className="w-4 h-4 mt-0.5 rounded border-white/20 accent-indigo-500 shrink-0"
-                />
-                <label htmlFor="agree" className="text-xs text-slate-400 leading-relaxed">
-                  I agree to the{" "}
-                  <a href="#" className="text-indigo-400 hover:text-indigo-300">Terms of Service</a>{" "}
-                  and{" "}
-                  <a href="#" className="text-indigo-400 hover:text-indigo-300">Privacy Policy</a>
-                </label>
-              </div>
-
-              <button
-                type="submit"
-                disabled={!fullName.trim() || !company.trim() || !bizType.trim() || !email.trim() || !password || password !== confirm || !agreed || loading || !!successMsg}
-                className="w-full mt-5 py-3 bg-gradient-to-r from-indigo-500 to-violet-600 text-white font-semibold rounded-xl hover:from-indigo-600 hover:to-violet-700 transition-all shadow-lg shadow-indigo-900/50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {loading ? <Loader2 size={16} className="animate-spin" /> : "Continue to Email Verification"}
-              </button>
-            </form>
-          ) : (
-            /* STEP 2: Professional 6-Digit OTP Verification Screen */
-            <form onSubmit={handleVerifyOtp} className="space-y-6">
-              {/* Destination badge & Change Email */}
-              <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-4 text-center">
-                <div className="w-10 h-10 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center mx-auto mb-2">
-                  <Mail size={18} className="text-indigo-400" />
-                </div>
-                <p className="text-xs text-slate-400">
-                  Verification code dispatched to:
-                </p>
-                <p className="text-sm font-semibold text-indigo-300 tracking-wide mt-0.5 font-mono">
-                  {maskedEmail || email}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => { setStep("form"); setErrorMsg(null); setSuccessMsg(null); }}
-                  className="mt-2 text-xs text-indigo-400 hover:text-indigo-300 underline underline-offset-2 transition-colors"
-                >
-                  Change email address
-                </button>
-              </div>
-
-              {/* 6 Digit OTP Inputs */}
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-2.5 text-center">
-                  Enter 6-Digit Verification Code
-                </label>
-                <div className="flex items-center justify-center gap-2 sm:gap-3">
-                  {otp.map((digit, index) => (
-                    <input
-                      key={index}
-                      ref={el => { otpInputRefs.current[index] = el; }}
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={1}
-                      value={digit}
-                      onChange={e => handleOtpChange(index, e.target.value)}
-                      onKeyDown={e => handleOtpKeyDown(index, e)}
-                      onPaste={index === 0 ? handleOtpPaste : undefined}
-                      className="w-11 h-13 sm:w-12 sm:h-14 text-center text-xl sm:text-2xl font-bold font-mono text-white bg-white/5 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-400 transition-all select-all shadow-inner"
-                      autoFocus={index === 0}
-                    />
-                  ))}
-                </div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">Company Name</label>
+                <input
+                  value={company}
+                  onChange={e => { setCompany(e.target.value); setErrorMsg(null); }}
+                  type="text"
+                  placeholder="Your company name"
+                  autoComplete="organization"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
+                />
               </div>
+            </div>
 
-              {/* Countdown & Expiry Indicators */}
-              <div className="flex items-center justify-between text-xs px-1">
-                <div className="flex items-center gap-1.5 text-slate-400">
-                  <Clock size={13} className={expiry < 60 ? "text-amber-400 animate-pulse" : "text-slate-400"} />
-                  <span>
-                    Expires in:{" "}
-                    <span className={`font-mono font-semibold ${expiry < 60 ? "text-amber-400" : "text-slate-200"}`}>
-                      {formatTimer(expiry)}
-                    </span>
-                  </span>
-                </div>
-
-                <div>
-                  {cooldown > 0 ? (
-                    <span className="text-slate-500 font-mono">
-                      Resend in {cooldown}s
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleResendOtp}
-                      disabled={resending}
-                      className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 font-medium transition-colors disabled:opacity-40"
-                    >
-                      <RefreshCw size={12} className={resending ? "animate-spin" : ""} />
-                      {resending ? "Sending..." : "Resend code"}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Verify & Create Account Button */}
-              <button
-                type="submit"
-                disabled={otp.join("").length !== 6 || verifying || !!successMsg || expiry <= 0}
-                className="w-full py-3 bg-gradient-to-r from-indigo-500 to-violet-600 text-white font-semibold rounded-xl hover:from-indigo-600 hover:to-violet-700 transition-all shadow-lg shadow-indigo-900/50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">Business Type</label>
+              <select
+                value={bizType}
+                onChange={e => { setBizType(e.target.value); setErrorMsg(null); }}
+                className="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30 appearance-none text-white"
+                style={{ color: bizType ? "#fff" : "#64748b" }}
               >
-                {verifying ? (
-                  <>
-                    <Loader2 size={16} className="animate-spin" />
-                    <span>Verifying Code...</span>
-                  </>
-                ) : (
-                  <>
-                    <Shield size={16} />
-                    <span>Verify & Complete Registration</span>
-                  </>
-                )}
-              </button>
+                {businessTypes.map(t => (
+                  <option key={t} value={t === "Select business type" ? "" : t} className="text-slate-900 bg-white">
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-              {/* Security Notice */}
-              <p className="text-center text-xs text-slate-500 leading-relaxed">
-                Security notice: Accounts are only activated after successful OTP verification.
-              </p>
-            </form>
-          )}
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">Work Email <span className="text-red-400">*</span></label>
+              <input
+                value={email}
+                onChange={e => { setEmail(e.target.value); setErrorMsg(null); }}
+                type="email"
+                autoComplete="email"
+                placeholder="you@company.com"
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">Password <span className="text-red-400">*</span></label>
+                <div className="relative">
+                  <input
+                    value={password}
+                    onChange={e => { setPassword(e.target.value); setErrorMsg(null); }}
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="new-password"
+                    placeholder="Min. 6 characters"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl pl-4 pr-10 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors"
+                    tabIndex={-1}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">Confirm Password <span className="text-red-400">*</span></label>
+                <div className="relative">
+                  <input
+                    value={confirm}
+                    onChange={e => { setConfirm(e.target.value); setErrorMsg(null); }}
+                    type={showConfirm ? "text" : "password"}
+                    autoComplete="new-password"
+                    placeholder="Repeat password"
+                    className={`w-full bg-white/5 border rounded-xl pl-4 pr-10 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${confirm && confirm !== password ? "border-red-500/50" : "border-white/10 focus:border-indigo-500/30"}`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirm(!showConfirm)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors"
+                    tabIndex={-1}
+                    aria-label={showConfirm ? "Hide password" : "Show password"}
+                  >
+                    {showConfirm ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+                {confirm && confirm !== password && (
+                  <p className="text-xs text-red-400 mt-1">Passwords do not match</p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-start gap-2.5 pt-1">
+              <input
+                type="checkbox"
+                id="agree"
+                checked={agreed}
+                onChange={e => { setAgreed(e.target.checked); setErrorMsg(null); }}
+                className="w-4 h-4 mt-0.5 rounded border-white/20 accent-indigo-500 shrink-0"
+              />
+              <label htmlFor="agree" className="text-xs text-slate-400 leading-relaxed">
+                I agree to the{" "}
+                <a href="#" className="text-indigo-400 hover:text-indigo-300">Terms of Service</a>{" "}
+                and{" "}
+                <a href="#" className="text-indigo-400 hover:text-indigo-300">Privacy Policy</a>
+              </label>
+            </div>
+
+            <button
+              type="submit"
+              disabled={!fullName.trim() || !email.trim() || !password || password !== confirm || !agreed || loading || !!successMsg}
+              className="w-full mt-5 py-3 bg-gradient-to-r from-indigo-500 to-violet-600 text-white font-semibold rounded-xl hover:from-indigo-600 hover:to-violet-700 transition-all shadow-lg shadow-indigo-900/50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {loading ? (
+                <>
+                  <Loader2 size={16} className="animate-spin" />
+                  <span>Creating Account...</span>
+                </>
+              ) : (
+                <span>Create Account</span>
+              )}
+            </button>
+          </form>
 
           <p className="text-center text-sm text-slate-500 mt-5">
             Already have an account?{" "}
@@ -5576,7 +5349,7 @@ export default function App() {
             setPage={handlePageChange}
             onRegistered={(newEmail) => {
               setLoginEmail(newEmail);
-              setLoginNotice("Account created successfully! Please sign in with your password.");
+              setLoginNotice("Account created successfully. Please sign in.");
               handlePageChange("login");
             }}
           />
