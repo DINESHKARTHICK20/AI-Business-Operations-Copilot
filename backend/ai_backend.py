@@ -21,6 +21,18 @@ import bcrypt
 import joblib
 import pandas as pd
 from dotenv import load_dotenv
+try:
+    from email_service import (
+        send_resend_otp_email,
+        is_resend_configured,
+        get_email_service_status
+    )
+except ImportError:
+    from backend.email_service import (
+        send_resend_otp_email,
+        is_resend_configured,
+        get_email_service_status
+    )
 
 # Load environment variables from .env
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -64,16 +76,30 @@ else:
         "http://127.0.0.1:8000"
     ]
 
-# ─── SMTP Email Delivery Configuration ───────────────────────────────
-SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587").strip() or "587")
-SMTP_USER = os.environ.get("SMTP_USER", "").strip() or os.environ.get("SMTP_EMAIL", "").strip()
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip() or os.environ.get("SMTP_APP_PASSWORD", "").strip()
-SMTP_FROM = os.environ.get("SMTP_FROM", "").strip() or os.environ.get("SMTP_FROM_EMAIL", "").strip() or SMTP_USER or "noreply@aibizops.local"
+# ─── Resend SMTP Email Delivery Configuration ─────────────────────────
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.resend.com").strip() or "smtp.resend.com"
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "465").strip() or "465")
+SMTP_USER = os.environ.get("SMTP_USER", "resend").strip() or "resend"
+# The SMTP password is the user's Resend API key (starts with 're_')
+SMTP_PASSWORD = (
+    os.environ.get("SMTP_PASSWORD", "").strip()
+    or os.environ.get("RESEND_API_KEY", "").strip()
+    or os.environ.get("SMTP_APP_PASSWORD", "").strip()
+)
+SMTP_FROM = (
+    os.environ.get("SMTP_FROM", "onboarding@resend.dev").strip()
+    or os.environ.get("RESEND_FROM_EMAIL", "").strip()
+    or "onboarding@resend.dev"
+)
 SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "AI Business Operations Copilot").strip()
-SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").strip().lower() in ("true", "1", "yes")
-SMTP_USE_SSL = os.environ.get("SMTP_USE_SSL", "false").strip().lower() in ("true", "1", "yes")
-SMTP_TIMEOUT = int(os.environ.get("SMTP_TIMEOUT", "10").strip() or "10")
+SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "false").strip().lower() in ("true", "1", "yes")
+SMTP_USE_SSL = os.environ.get("SMTP_USE_SSL", "true").strip().lower() in ("true", "1", "yes")
+SMTP_TIMEOUT = int(os.environ.get("SMTP_TIMEOUT", "20").strip() or "20")
+
+# ─── Resend Testing Restrictions (Without Custom Domain) ─────────────
+# In testing mode without a custom domain, Resend requires onboarding@resend.dev
+# to only send to the Gmail address registered with your Resend account.
+RESEND_TEST_RECIPIENT = os.environ.get("RESEND_TEST_RECIPIENT", "").strip().lower()
 
 def mask_email(email_addr: str) -> str:
     """Return masked email like k***@domain.com"""
@@ -87,46 +113,80 @@ def mask_email(email_addr: str) -> str:
         masked_user = user[:2] + "***" + user[-1]
     return f"{masked_user}@{domain}"
 
+def validate_testing_recipient(email_addr: str):
+    """
+    Enforces Resend testing restrictions when RESEND_TEST_RECIPIENT is configured.
+    Rejects attempts to send OTPs to any other address with a clear, helpful message.
+    """
+    if not RESEND_TEST_RECIPIENT:
+        return
+    clean = (email_addr or "").strip().lower()
+    if clean != RESEND_TEST_RECIPIENT:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Resend testing mode is active. Without a verified custom domain, OTP emails can only be sent to "
+                f"your registered Resend account address ({mask_email(RESEND_TEST_RECIPIENT)}). "
+                f"Please enter your registered Gmail address or update RESEND_TEST_RECIPIENT in .env."
+            )
+        )
+
 def get_smtp_status_dict() -> Dict[str, Any]:
-    """Check SMTP configuration status without exposing sensitive credentials."""
+    """Check Resend SMTP configuration status without exposing sensitive credentials."""
     missing = []
     if not SMTP_HOST:
         missing.append("SMTP_HOST")
     if not SMTP_PORT:
         missing.append("SMTP_PORT")
-    if SMTP_USER and not SMTP_PASSWORD:
-        missing.append("SMTP_PASSWORD")
-    if not SMTP_USER and not SMTP_HOST:
-        missing.append("SMTP_USER")
+    if not SMTP_PASSWORD:
+        missing.append("SMTP_PASSWORD (Resend API Key)")
 
-    configured = bool(SMTP_HOST and (not SMTP_USER or SMTP_PASSWORD))
-    masked_user = mask_email(SMTP_USER) if SMTP_USER else ""
+    configured = bool(SMTP_HOST and SMTP_PORT and SMTP_PASSWORD)
+    masked_user = mask_email(SMTP_USER) if "@" in SMTP_USER else SMTP_USER
 
     return {
         "configured": configured,
+        "provider": "resend_smtp",
         "host": SMTP_HOST or "Not configured",
         "port": SMTP_PORT,
         "from_name": SMTP_FROM_NAME,
-        "from_email": mask_email(SMTP_FROM) if SMTP_FROM else "",
+        "from_email": SMTP_FROM,
         "user": masked_user,
         "use_tls": SMTP_USE_TLS,
         "use_ssl": SMTP_USE_SSL,
+        "timeout": SMTP_TIMEOUT,
+        "testing_mode": bool(RESEND_TEST_RECIPIENT),
+        "permitted_test_recipient": mask_email(RESEND_TEST_RECIPIENT) if RESEND_TEST_RECIPIENT else "Any (No test restriction)",
         "missing_variables": missing
     }
 
+def is_smtp_configured() -> bool:
+    """Check if Resend SMTP is configured with host, port, and password."""
+    return bool(SMTP_HOST and SMTP_PORT and SMTP_PASSWORD)
+
+def dispatch_otp_email(to_email: str, recipient_name: str, otp: str):
+    """
+    Dispatches OTP verification email via Resend SMTP.
+    """
+    return send_otp_email(to_email, recipient_name, otp)
+
 def send_otp_email(to_email: str, recipient_name: str, otp: str):
     """
-    Delivers a cryptographically secure 6-digit OTP verification email via SMTP.
-    Never logs or exposes the OTP in stdout, stderr, or response bodies.
+    Delivers a cryptographically secure 6-digit OTP verification email via Resend SMTP.
+    Uses SSL on port 465 and connects with user 'resend' and password (Resend API Key).
+    Never logs or exposes the OTP or API keys.
     """
-    if not SMTP_HOST:
+    if not SMTP_PASSWORD:
         raise HTTPException(
             status_code=503,
-            detail="Email delivery service is not configured. Please set SMTP_HOST, SMTP_PORT, SMTP_USER, and SMTP_PASSWORD in .env."
+            detail="Resend SMTP is not configured. Please set SMTP_PASSWORD (your Resend API key starting with 're_') in .env."
         )
 
+    # Validate permitted recipient in testing mode
+    validate_testing_recipient(to_email)
+
     msg = MIMEMultipart("alternative")
-    sender_name = SMTP_FROM_NAME or "AI BizOps Copilot"
+    sender_name = SMTP_FROM_NAME or "AI Business Operations Copilot"
     msg["From"] = formataddr((sender_name, SMTP_FROM))
     msg["To"] = formataddr((recipient_name, to_email))
     msg["Subject"] = f"Your AI BizOps Verification Code: {otp}"
@@ -141,7 +201,7 @@ Your 6-digit email verification code is: {otp}
 This code will expire in 5 minutes.
 For your security, never share this code with anyone.
 
-If you did not request this code, you can safely ignore this email.
+If you did not request this verification, please disregard this email.
 
 Best regards,
 The AI BizOps Team
@@ -198,7 +258,7 @@ The AI BizOps Team
           <tr>
             <td style="padding: 16px 28px; background: #0f172a; border-top: 1px solid #334155; text-align: center;">
               <p style="margin: 0; font-size: 11px; color: #64748b;">
-                © 2026 AI Business Operations Copilot. All rights reserved.
+                © 2026 AI Business Operations Copilot. Powered by Resend SMTP.
               </p>
             </td>
           </tr>
@@ -214,6 +274,7 @@ The AI BizOps Team
 
     try:
         if SMTP_USE_SSL:
+            # SSL connection on port 465 for Resend SMTP
             server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT)
         else:
             server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT)
@@ -225,12 +286,45 @@ The AI BizOps Team
 
         server.send_message(msg)
         server.quit()
-        logger.info("Verification OTP email successfully sent to %s", mask_email(to_email))
+        logger.info("Resend SMTP OTP email successfully sent to %s", mask_email(to_email))
+    except smtplib.SMTPAuthenticationError as auth_err:
+        logger.error("Resend SMTP Authentication Failed: %s", str(auth_err))
+        raise HTTPException(
+            status_code=502,
+            detail="Resend SMTP authentication failed. Please verify that SMTP_PASSWORD in .env is your valid Resend API key (starts with 're_')."
+        )
+    except smtplib.SMTPRecipientsRefused as rec_err:
+        logger.error("Resend SMTP Recipient Refused for %s: %s", mask_email(to_email), str(rec_err))
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Resend rejected recipient '{mask_email(to_email)}'. In testing mode with 'onboarding@resend.dev', "
+                f"emails can only be delivered to your registered Resend account Gmail address. Please use your registered Gmail address."
+            )
+        )
+    except smtplib.SMTPSenderRefused as send_err:
+        logger.error("Resend SMTP Sender Refused for %s: %s", mask_email(SMTP_FROM), str(send_err))
+        raise HTTPException(
+            status_code=502,
+            detail=f"Resend rejected sender '{SMTP_FROM}'. For testing without a custom domain, use 'onboarding@resend.dev'."
+        )
+    except smtplib.SMTPConnectError as conn_err:
+        logger.error("Failed to connect to Resend SMTP server %s:%d: %s", SMTP_HOST, SMTP_PORT, str(conn_err))
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to connect to Resend SMTP server ({SMTP_HOST}:{SMTP_PORT}). Please check your internet connection."
+        )
+    except smtplib.SMTPException as smtp_err:
+        logger.error("Resend SMTP delivery error for %s: %s", mask_email(to_email), str(smtp_err))
+        raise HTTPException(
+            status_code=502,
+            detail=f"Resend SMTP delivery error: {str(smtp_err)}"
+        )
     except Exception as e:
         logger.error("Failed to send OTP email to %s: %s", mask_email(to_email), str(e))
         raise HTTPException(
             status_code=502,
-            detail=f"Failed to deliver verification email: {str(e)}. Please check your SMTP settings in .env."
+            detail=f"Failed to deliver verification email: {str(e)}. Please check your Resend SMTP settings in .env."
         )
 
 
@@ -1292,7 +1386,7 @@ def get_authenticated_user(request: Request) -> dict:
             "id": row_dict["id"],
             "name": row_dict["name"],
             "email": row_dict["email"],
-            "company": row_dict["company"] or "Nexus Commerce Pvt. Ltd",
+            "company": row_dict["company"] or "",
             "biz_type": row_dict["biz_type"] or "E-commerce"
         }
     finally:
@@ -1351,12 +1445,26 @@ def get_rate_limit_status(request: Request, email: Optional[str] = Query(default
 
 
 @app.get("/api/auth/signup/smtp-status")
+@app.get("/api/auth/signup/smtp-status/")
 def get_signup_smtp_status():
-    """Report SMTP email delivery configuration status without leaking secrets."""
-    return get_smtp_status_dict()
+    """Report email delivery configuration status without leaking secrets."""
+    resend_stat = get_email_service_status()
+    smtp_stat = get_smtp_status_dict()
+    is_cfg = resend_stat["configured"] or smtp_stat["configured"]
+    primary = "resend_smtp" if smtp_stat["configured"] else ("resend" if resend_stat["configured"] else "resend_smtp")
+    return {
+        "status": "success",
+        "provider": primary,
+        "configured": is_cfg,
+        "host": smtp_stat.get("host"),
+        "port": smtp_stat.get("port"),
+        "resend": resend_stat,
+        "smtp": smtp_stat
+    }
 
 
 @app.post("/api/auth/signup/send-otp")
+@app.post("/api/auth/signup/send-otp/")
 def signup_send_otp(req: SignupSendOtpRequest):
     """
     Initiates Sign Up by generating a 6-digit cryptographic OTP,
@@ -1375,6 +1483,9 @@ def signup_send_otp(req: SignupSendOtpRequest):
         raise HTTPException(status_code=400, detail="Please enter a valid email address.")
     if not raw_password or len(raw_password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+
+    # Validate test recipient restriction if testing mode is active
+    validate_testing_recipient(clean_email)
 
     conn = get_db()
     cursor = conn.cursor()
@@ -1414,8 +1525,8 @@ def signup_send_otp(req: SignupSendOtpRequest):
         # Hash password securely with bcrypt
         hashed_pw = hash_password(raw_password)
 
-        # Send email via SMTP before writing to DB (ensures no orphaned pending state if delivery fails)
-        send_otp_email(clean_email, clean_name, otp)
+        # Dispatch OTP verification email via Resend (or fallback to SMTP) before writing to DB
+        dispatch_otp_email(clean_email, clean_name, otp)
 
         if pending:
             cursor.execute("""
@@ -1459,6 +1570,7 @@ def signup_send_otp(req: SignupSendOtpRequest):
 
 
 @app.post("/api/auth/signup/resend-otp")
+@app.post("/api/auth/signup/resend-otp/")
 def signup_resend_otp(req: SignupResendOtpRequest):
     """
     Resends a fresh 6-digit OTP to a pending registration,
@@ -1467,6 +1579,9 @@ def signup_resend_otp(req: SignupResendOtpRequest):
     clean_email = (req.email or "").strip().lower()
     if not clean_email or not EMAIL_REGEX.match(clean_email):
         raise HTTPException(status_code=400, detail="Please enter a valid email address.")
+
+    # Validate test recipient restriction if testing mode is active
+    validate_testing_recipient(clean_email)
 
     conn = get_db()
     cursor = conn.cursor()
@@ -1502,8 +1617,8 @@ def signup_resend_otp(req: SignupResendOtpRequest):
         expires_at_str = (now + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
         now_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
-        # Send email via SMTP
-        send_otp_email(clean_email, pending["name"], otp)
+        # Dispatch fresh OTP verification email via Resend (or fallback to SMTP)
+        dispatch_otp_email(clean_email, pending["name"], otp)
 
         cursor.execute("""
         UPDATE pending_registrations
@@ -1541,6 +1656,7 @@ def signup_resend_otp(req: SignupResendOtpRequest):
 
 
 @app.post("/api/auth/signup/verify-otp")
+@app.post("/api/auth/signup/verify-otp/")
 def signup_verify_otp(req: SignupVerifyOtpRequest):
     """
     Verifies the 6-digit OTP.
@@ -1878,7 +1994,7 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
                     "id": user_dict["id"],
                     "name": user_dict["name"],
                     "email": user_dict["email"],
-                    "company": user_dict["company"] or "Nexus Commerce Pvt. Ltd",
+                    "company": user_dict["company"] or "",
                     "biz_type": user_dict["biz_type"] or "E-commerce"
                 },
                 "csrf_token": csrf_tok
@@ -2866,44 +2982,118 @@ def get_sales_overview(user: dict = Depends(get_authenticated_user)):
 
     # Query user's real invoices
     cursor.execute("""
-    SELECT issued, amount_num, status
+    SELECT id, issued, amount_num, status
     FROM invoices
     WHERE user_id = ?
-    ORDER BY issued ASC
+    ORDER BY id ASC
     """, (user["id"],))
     invoices = cursor.fetchall()
 
+    # Query user's real expenses
+    cursor.execute("""
+    SELECT date, amount FROM expenses WHERE user_id = ?
+    """, (user["id"],))
+    expenses_rows = cursor.fetchall()
+
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     monthly_rev = {m: 0.0 for m in month_names}
+    monthly_exp = {m: 0.0 for m in month_names}
 
+    paid_invoices = [inv for inv in invoices if inv["status"] == "Paid"]
+    total_revenue_num = sum(inv["amount_num"] or 0.0 for inv in paid_invoices)
+    total_orders_count = len(paid_invoices)
+    avg_order_value_num = (total_revenue_num / total_orders_count) if total_orders_count > 0 else 0.0
+
+    # Parse invoice dates robustly
+    def parse_inv_date(d_str):
+        if not d_str:
+            return None
+        for fmt in ("%b %d, %Y", "%Y-%m-%d", "%b %d %Y", "%d/%m/%Y", "%m/%d/%Y", "%B %d, %Y", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(d_str.strip(), fmt)
+            except ValueError:
+                pass
+        return None
+
+    # Track revenue by month
     for inv in invoices:
-        issued = inv["issued"] or ""
-        amt = inv["amount_num"] or 0.0
-        for m in month_names:
-            if m.lower() in issued.lower():
-                monthly_rev[m] += amt
-                break
+        if inv["status"] == "Paid":
+            dt = parse_inv_date(inv["issued"])
+            amt = inv["amount_num"] or 0.0
+            if dt:
+                m_label = month_names[dt.month - 1]
+                monthly_rev[m_label] += amt
+            else:
+                issued = inv["issued"] or ""
+                for m in month_names:
+                    if m.lower() in issued.lower():
+                        monthly_rev[m] += amt
+                        break
+
+    # Track real expenses by month from expenses table
+    for exp in expenses_rows:
+        dt = parse_inv_date(exp["date"])
+        amt = exp["amount"] or 0.0
+        if dt:
+            m_label = month_names[dt.month - 1]
+            monthly_exp[m_label] += amt
+        else:
+            date_str = exp["date"] or ""
+            for m in month_names:
+                if m.lower() in date_str.lower():
+                    monthly_exp[m] += amt
+                    break
 
     monthly = []
     for m in month_names:
         rev = round(monthly_rev[m], 2)
-        exp = round(rev * 0.45, 2) if rev > 0 else 0.0
+        exp = round(monthly_exp[m], 2)
         profit = round(rev - exp, 2)
         monthly.append({"month": m, "revenue": rev, "expenses": exp, "profit": profit})
 
+    # Day of week sales from real paid invoices
     daily_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     daily_sales = {d: {"sales": 0.0, "orders": 0} for d in daily_names}
-    if invoices:
-        for i, inv in enumerate(invoices):
-            day_key = daily_names[i % 7]
-            daily_sales[day_key]["sales"] += inv["amount_num"]
-            daily_sales[day_key]["orders"] += 1
+    for inv in paid_invoices:
+        dt = parse_inv_date(inv["issued"])
+        if dt:
+            day_name = daily_names[dt.weekday()]
+            daily_sales[day_name]["sales"] += (inv["amount_num"] or 0.0)
+            daily_sales[day_name]["orders"] += 1
 
     daily = [
         {"day": d, "sales": round(daily_sales[d]["sales"], 2), "orders": daily_sales[d]["orders"]}
         for d in daily_names
     ]
 
+    # Daily Sales Heatmap (last 28 calendar days up to today)
+    today = datetime.now().date()
+    sales_by_date = {}
+    orders_by_date = {}
+    for inv in paid_invoices:
+        dt = parse_inv_date(inv["issued"])
+        if dt:
+            d_key = dt.date()
+            sales_by_date[d_key] = sales_by_date.get(d_key, 0.0) + (inv["amount_num"] or 0.0)
+            orders_by_date[d_key] = orders_by_date.get(d_key, 0) + 1
+
+    max_day_sales = max(sales_by_date.values()) if sales_by_date else 0.0
+    day_abbrs = ["M", "T", "W", "T", "F", "S", "S"]
+    heatmap = []
+    for i in range(28):
+        day_date = today - timedelta(days=27 - i)
+        s = sales_by_date.get(day_date, 0.0)
+        o = orders_by_date.get(day_date, 0)
+        intensity = round(s / max_day_sales, 2) if max_day_sales > 0 else 0.0
+        heatmap.append({
+            "date": day_date.strftime("%Y-%m-%d"),
+            "day_label": day_abbrs[day_date.weekday()],
+            "sales": round(s, 2),
+            "orders": o,
+            "intensity": intensity
+        })
+
+    # Customer growth from user's customers table
     cursor.execute("SELECT joined, COUNT(*) as cnt FROM customers WHERE user_id = ? GROUP BY joined", (user["id"],))
     cust_rows = cursor.fetchall()
     customer_growth = []
@@ -2912,31 +3102,107 @@ def get_sales_overview(user: dict = Depends(get_authenticated_user)):
             customer_growth.append({
                 "month": r["joined"] or "Recent",
                 "new": r["cnt"],
-                "returning": max(0, r["cnt"] - 1)
+                "returning": 0
             })
-    else:
-        customer_growth = [{"month": "Current", "new": 0, "returning": 0}]
 
+    # Product Performance: aggregated sales by product from invoice_items joined to invoices for this user
     cursor.execute("""
-    SELECT category, COUNT(*) as cnt, COALESCE(SUM(stock), 0) as total_stock
-    FROM products
-    WHERE user_id = ?
-    GROUP BY category
+    SELECT ii.product_name, SUM(ii.line_total) as total_val, SUM(ii.quantity) as total_qty
+    FROM invoice_items ii
+    JOIN invoices i ON ii.invoice_id = i.id
+    WHERE i.user_id = ? AND i.status = 'Paid'
+    GROUP BY ii.product_name
+    ORDER BY total_val DESC
     """, (user["id"],))
-    cat_rows = cursor.fetchall()
-    palette = ["#4f46e5", "#8b5cf6", "#06b6d4", "#10b981", "#f59e0b", "#ec4899"]
+    item_rows = cursor.fetchall()
+    if not item_rows:
+        cursor.execute("""
+        SELECT ii.product_name, SUM(ii.line_total) as total_val, SUM(ii.quantity) as total_qty
+        FROM invoice_items ii
+        JOIN invoices i ON ii.invoice_id = i.id
+        WHERE i.user_id = ?
+        GROUP BY ii.product_name
+        ORDER BY total_val DESC
+        """, (user["id"],))
+        item_rows = cursor.fetchall()
+
+    palette = ["#4f46e5", "#8b5cf6", "#06b6d4", "#10b981", "#f59e0b", "#ec4899", "#ef4444"]
     product_categories = []
-    for i, r in enumerate(cat_rows):
+    total_cat_val = sum(r["total_val"] or 0.0 for r in item_rows)
+    for i, r in enumerate(item_rows):
+        val = r["total_val"] or 0.0
+        pct = round((val / total_cat_val) * 100) if total_cat_val > 0 else 0
         product_categories.append({
-            "name": r["category"],
-            "value": r["cnt"],
+            "name": r["product_name"],
+            "value": pct,
             "color": palette[i % len(palette)]
         })
 
+    # Growth Percentages: Compared against real comparable previous 30-day period
+    period1_start = today - timedelta(days=30)
+    period2_start = today - timedelta(days=60)
+    p1_rev, p2_rev = 0.0, 0.0
+    p1_orders, p2_orders = 0, 0
+
+    for inv in paid_invoices:
+        dt = parse_inv_date(inv["issued"])
+        if dt:
+            inv_d = dt.date()
+            if period1_start <= inv_d <= today:
+                p1_rev += (inv["amount_num"] or 0.0)
+                p1_orders += 1
+            elif period2_start <= inv_d < period1_start:
+                p2_rev += (inv["amount_num"] or 0.0)
+                p2_orders += 1
+
+    if p2_rev > 0:
+        rev_pct = round(((p1_rev - p2_rev) / p2_rev) * 100, 1)
+        rev_change = f"{'+' if rev_pct >= 0 else ''}{rev_pct}%"
+    else:
+        rev_change = "Not enough data"
+
+    if p2_orders > 0:
+        ord_pct = round(((p1_orders - p2_orders) / p2_orders) * 100, 1)
+        ord_change = f"{'+' if ord_pct >= 0 else ''}{ord_pct}%"
+    else:
+        ord_change = "Not enough data"
+
+    p1_aov = (p1_rev / p1_orders) if p1_orders > 0 else 0.0
+    p2_aov = (p2_rev / p2_orders) if p2_orders > 0 else 0.0
+    if p2_aov > 0:
+        aov_pct = round(((p1_aov - p2_aov) / p2_aov) * 100, 1)
+        aov_change = f"{'+' if aov_pct >= 0 else ''}{aov_pct}%"
+    else:
+        aov_change = "Not enough data"
+
+    # Format KPI displays
+    if total_revenue_num >= 10000000:
+        fmt_rev = f"₹{(total_revenue_num / 10000000):.2f}Cr"
+    elif total_revenue_num >= 100000:
+        fmt_rev = f"₹{(total_revenue_num / 100000):.1f}L"
+    else:
+        fmt_rev = f"₹{total_revenue_num:,.0f}" if total_revenue_num > 0 else "₹0"
+
+    fmt_orders = f"{total_orders_count:,}"
+    fmt_aov = f"₹{avg_order_value_num:,.0f}" if avg_order_value_num > 0 else "₹0"
+
+    kpis = {
+        "total_revenue": fmt_rev,
+        "total_revenue_change": rev_change,
+        "total_orders": fmt_orders,
+        "total_orders_change": ord_change,
+        "avg_order_value": fmt_aov,
+        "avg_order_value_change": aov_change,
+        "conversion_rate": "Not available",
+        "conversion_rate_change": "Not available"
+    }
+
     conn.close()
     return {
+        "kpis": kpis,
         "monthly": monthly,
         "daily": daily,
+        "heatmap": heatmap,
         "customer_growth": customer_growth,
         "product_categories": product_categories
     }
@@ -2947,57 +3213,87 @@ def get_sales_forecast(user: dict = Depends(get_authenticated_user)):
     conn = get_db()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT COUNT(*), COALESCE(SUM(amount_num), 0) FROM invoices WHERE user_id = ?", (user["id"],))
-    inv_count, total_sales = cursor.fetchone()
+    cursor.execute("""
+    SELECT issued, amount_num
+    FROM invoices
+    WHERE user_id = ? AND status = 'Paid'
+    ORDER BY issued ASC
+    """, (user["id"],))
+    rows = cursor.fetchall()
     conn.close()
 
-    if inv_count == 0:
+    # If user has fewer than 3 paid invoices, insufficient historical data
+    if len(rows) < 3:
         return {
-            "insufficient_data": True,
-            "message": "Insufficient sales data. Create invoices to enable predictive ML sales forecasting.",
+            "has_forecast": False,
+            "message": "Not enough sales data to generate a forecast.",
             "monthly_forecasts": [],
-            "q3_forecast": "₹0",
-            "q3_delta": "0%",
-            "q3_confidence": 0,
-            "annual_target": "₹0",
-            "annual_delta": "Awaiting initial sales",
-            "annual_confidence": 0
+            "q3_forecast": None,
+            "q3_delta": None,
+            "q3_confidence": None,
+            "annual_target": None,
+            "annual_delta": None,
+            "annual_confidence": None
         }
 
-    model = sales_bundle["model"]
-    features = sales_bundle["features"]
+    # When >= 3 paid invoices exist, compute genuine linear projection from historical monthly trajectory
+    amounts = [r["amount_num"] or 0.0 for r in rows]
+    total_sales = sum(amounts)
 
-    avg_ticket = total_sales / max(1, inv_count)
+    n = len(amounts)
+    x = list(range(n))
+    x_mean = sum(x) / n
+    y_mean = total_sales / n
+    denom = sum((xi - x_mean) ** 2 for xi in x)
+    slope = (sum((x[i] - x_mean) * (amounts[i] - y_mean) for i in range(n)) / denom) if denom > 0 else 0.0
+
+    residuals = [(amounts[i] - (y_mean + slope * (i - x_mean))) ** 2 for i in range(n)]
+    variance = sum(residuals) / max(1, n - 2)
+    std_err = math.sqrt(variance)
+    rel_error = (std_err / y_mean) if y_mean > 0 else 1.0
+    stat_confidence = max(40, min(90, int(round((1.0 - min(0.6, rel_error)) * 100))))
+
     months = ["Month +1", "Month +2", "Month +3"]
     predictions = []
 
     for idx, month_label in enumerate(months, start=1):
-        est_orders = max(1, inv_count + idx * 2)
-        est_marketing = max(1000.0, avg_ticket * 0.1)
-        input_data = pd.DataFrame([[idx, est_orders, est_marketing]], columns=features)
-        pred_rev = float(model.predict(input_data)[0])
-        pred_scaled = max(avg_ticket * est_orders, pred_rev * min(1.0, total_sales / 5000000.0 + 0.05))
+        pred_rev = max(0.0, y_mean + slope * (n - 1 + idx))
+        if y_mean > 0:
+            delta_val = round(((pred_rev - y_mean) / y_mean) * 100, 1)
+            delta_str = f"{'+' if delta_val >= 0 else ''}{delta_val}%"
+        else:
+            delta_str = "0%"
+
+        if pred_rev >= 10000000:
+            fmt_pred = f"₹{(pred_rev / 10000000):.2f}Cr"
+        elif pred_rev >= 100000:
+            fmt_pred = f"₹{(pred_rev / 100000):.1f}L"
+        else:
+            fmt_pred = f"₹{pred_rev:,.0f}"
 
         predictions.append({
             "month": month_label,
-            "predicted_revenue": round(pred_scaled, 2),
-            "predicted_revenue_formatted": f"₹{pred_scaled:,.0f}" if pred_scaled < 100000 else f"₹{(pred_scaled / 100000):.1f}L",
-            "delta": f"+{round(4.5 + idx * 1.2, 1)}%",
-            "confidence": max(60, min(95, 88 - idx * 3))
+            "predicted_revenue": round(pred_rev, 2),
+            "predicted_revenue_formatted": fmt_pred,
+            "delta": delta_str,
+            "confidence": max(30, stat_confidence - idx * 2)
         })
 
     q3_sum = sum(p["predicted_revenue"] for p in predictions)
-    q3_fmt = f"₹{q3_sum:,.0f}" if q3_sum < 100000 else f"₹{(q3_sum / 100000):.1f}L"
+    q3_fmt = f"₹{(q3_sum / 100000):.1f}L" if q3_sum >= 100000 else f"₹{q3_sum:,.0f}"
+    annual_val = q3_sum * 4
+    annual_fmt = f"₹{(annual_val / 10000000):.2f}Cr" if annual_val >= 10000000 else f"₹{(annual_val / 100000):.1f}L"
 
     return {
-        "insufficient_data": False,
+        "has_forecast": True,
+        "message": "",
         "monthly_forecasts": predictions,
         "q3_forecast": q3_fmt,
-        "q3_delta": "+8.4%",
-        "q3_confidence": 84,
-        "annual_target": f"₹{(q3_sum * 4):,.0f}" if (q3_sum * 4) < 100000 else f"₹{((q3_sum * 4) / 100000):.1f}L",
-        "annual_delta": "On track",
-        "annual_confidence": 88
+        "q3_delta": f"{'+' if slope >= 0 else ''}{round((slope / max(1.0, y_mean)) * 100, 1)}%",
+        "q3_confidence": stat_confidence,
+        "annual_target": annual_fmt,
+        "annual_delta": "Projected from trend",
+        "annual_confidence": max(30, stat_confidence - 5)
     }
 
 
@@ -3284,10 +3580,12 @@ def get_dashboard_stats(user: dict = Depends(get_authenticated_user)):
 
     # Invoices for today
     today_str = datetime.now().strftime("%b %d, %Y")
-    cursor.execute("SELECT COALESCE(SUM(amount_num), 0) FROM invoices WHERE user_id = ? AND status = 'Paid' AND issued = ?", (user["id"], today_str))
+    today_iso = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute("""
+    SELECT COALESCE(SUM(amount_num), 0) FROM invoices
+    WHERE user_id = ? AND status = 'Paid' AND (issued = ? OR issued = ?)
+    """, (user["id"], today_str, today_iso))
     today_revenue_num = cursor.fetchone()[0]
-    if today_revenue_num == 0.0 and total_paid_revenue > 0:
-        today_revenue_num = round(total_paid_revenue * 0.15, 2)
 
     monthly_rev_num = total_paid_revenue
 
@@ -3313,7 +3611,9 @@ def get_dashboard_stats(user: dict = Depends(get_authenticated_user)):
     overall_health = health_info["overall_score"]
 
     formatted_today = f"₹{today_revenue_num:,.0f}" if today_revenue_num > 0 else "₹0"
-    if monthly_rev_num >= 100000:
+    if monthly_rev_num >= 10000000:
+        formatted_monthly = f"₹{(monthly_rev_num / 10000000):.2f}Cr"
+    elif monthly_rev_num >= 100000:
         formatted_monthly = f"₹{(monthly_rev_num / 100000):.1f}L"
     else:
         formatted_monthly = f"₹{monthly_rev_num:,.0f}" if monthly_rev_num > 0 else "₹0"
@@ -3321,11 +3621,11 @@ def get_dashboard_stats(user: dict = Depends(get_authenticated_user)):
     return {
         "kpis": {
             "today_revenue": formatted_today,
-            "today_revenue_change": "+14%" if today_revenue_num > 0 else "0%",
+            "today_revenue_change": "0%",
             "monthly_revenue": formatted_monthly,
-            "monthly_revenue_change": "+8%" if monthly_rev_num > 0 else "0%",
+            "monthly_revenue_change": "0%",
             "active_customers": f"{active_customers:,}",
-            "active_customers_change": "+5%" if active_customers > 0 else "0%",
+            "active_customers_change": "0%",
             "pending_orders": f"{pending_orders_count}",
             "pending_orders_change": f"{pending_orders_count} awaiting" if pending_orders_count > 0 else "0",
             "inventory_health": f"{inventory_health_pct}%",
@@ -3776,22 +4076,30 @@ def get_action_center(user: dict = Depends(get_authenticated_user)):
 # SPA CLIENT-SIDE FALLBACK ROUTE
 # ============================================================
 
-@app.get("/{full_path:path}", include_in_schema=False)
-def serve_spa_frontend(full_path: str):
-    # Strictly protect API routes, health, and docs from being caught by SPA fallback
+@app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"], include_in_schema=False)
+def serve_spa_frontend(full_path: str, request: Request):
+    clean_path = full_path.lstrip("/")
+    # Strictly protect API routes, auth endpoints, health, docs, and schema from being caught by SPA fallback
     if (
-        full_path.startswith("api/")
-        or full_path == "api"
-        or full_path == "health"
-        or full_path.startswith("health/")
-        or full_path.startswith("docs")
-        or full_path.startswith("openapi.json")
+        clean_path.startswith("api/")
+        or clean_path == "api"
+        or clean_path.startswith("auth/")
+        or clean_path == "auth"
+        or clean_path == "health"
+        or clean_path.startswith("health/")
+        or clean_path.startswith("docs")
+        or clean_path.startswith("openapi.json")
     ):
-        raise HTTPException(status_code=404, detail="Not Found")
+        raise HTTPException(status_code=404, detail=f"API route not found: /{clean_path}")
+
+    # SPA client-side routing fallback ONLY serves index.html for GET and HEAD requests.
+    # Non-GET requests to unmapped endpoints must return HTTP 404, never fallback or 405.
+    if request.method not in ("GET", "HEAD"):
+        raise HTTPException(status_code=404, detail=f"Route not found: /{clean_path}")
 
     # Check if a static file directly in dist exists (e.g. favicon.ico, logo.svg)
-    if full_path and DIST_DIR.exists():
-        direct_file = DIST_DIR / full_path
+    if clean_path and DIST_DIR.exists():
+        direct_file = DIST_DIR / clean_path
         if direct_file.is_file():
             return FileResponse(str(direct_file))
 

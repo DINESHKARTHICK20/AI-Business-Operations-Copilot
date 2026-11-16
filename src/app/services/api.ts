@@ -104,24 +104,45 @@ export interface InventoryForecastResult {
 }
 
 export interface SalesForecastResult {
-  monthly_forecasts: Array<{
+  has_forecast: boolean;
+  message?: string;
+  monthly_forecasts?: Array<{
     month: string;
     predicted_revenue: number;
     predicted_revenue_formatted: string;
     delta: string;
     confidence: number;
   }>;
-  q3_forecast: string;
-  q3_delta: string;
-  q3_confidence: number;
-  annual_target: string;
-  annual_delta: string;
-  annual_confidence: number;
+  q3_forecast?: string | null;
+  q3_delta?: string | null;
+  q3_confidence?: number | null;
+  annual_target?: string | null;
+  annual_delta?: string | null;
+  annual_confidence?: number | null;
+}
+
+export interface SalesHeatmapDay {
+  date: string;
+  day_label: string;
+  sales: number;
+  orders: number;
+  intensity: number;
 }
 
 export interface SalesOverview {
+  kpis: {
+    total_revenue: string;
+    total_revenue_change: string;
+    total_orders: string;
+    total_orders_change: string;
+    avg_order_value: string;
+    avg_order_value_change: string;
+    conversion_rate: string;
+    conversion_rate_change: string;
+  };
   monthly: Array<{ month: string; revenue: number; expenses: number; profit: number }>;
   daily: Array<{ day: string; sales: number; orders: number }>;
+  heatmap: Array<SalesHeatmapDay>;
   customer_growth: Array<{ month: string; new: number; returning: number }>;
   product_categories: Array<{ name: string; value: number; color: string }>;
 }
@@ -597,6 +618,10 @@ export const api = {
     });
   },
 
+  async sendOtp(data: { name: string; email: string; password: string; company?: string; biz_type?: string }) {
+    return this.signupSendOtp(data);
+  },
+
   async signupResendOtp(data: { email: string }): Promise<{ status: string; message: string; email: string; cooldown_seconds: number; expires_in_seconds: number }> {
     return request("/api/auth/signup/resend-otp", {
       method: "POST",
@@ -604,11 +629,19 @@ export const api = {
     });
   },
 
+  async resendOtp(data: { email: string }) {
+    return this.signupResendOtp(data);
+  },
+
   async signupVerifyOtp(data: { email: string; otp: string }): Promise<{ status: string; message: string; email: string }> {
     return request("/api/auth/signup/verify-otp", {
       method: "POST",
       body: JSON.stringify(data),
     });
+  },
+
+  async verifyOtp(data: { email: string; otp: string }) {
+    return this.signupVerifyOtp(data);
   },
 
   async registerUser(data: { name: string; email: string; password?: string; company?: string; biz_type?: string }): Promise<AuthResponse> {

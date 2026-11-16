@@ -2,56 +2,66 @@
 # Git Ignore - AI Business Operations Copilot
 # ============================================================
 
-# 1. Python Virtual Environments
+# ─── 1. Environment Files & Local Secrets ───────────────────
+.env
+.env.*
+.env.local
+.env.*.local
+**/.env
+**/.env.*
+**/.env.local
+**/.env.*.local
+backend/.env
+backend/.env.*
+
+# Explicitly allow committed example/template configurations
+!.env.example
+!**/.env.example
+!.env.*.example
+!**/.env.*.example
+
+# ─── 2. API Keys, Credentials & Local Secret Files ──────────
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+*service[-_]account*.json
+credentials.json
+client_secret*.json
+secrets.json
+secrets.*.json
+local_secrets.*
+id_rsa*
+id_ed25519*
+
+# ─── 3. Node.js Dependencies & Tooling Caches ───────────────
+node_modules/
+.pnp
+.pnp.js
+.npm/
+.yarn/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ─── 4. Python Virtual Environments ─────────────────────────
 .venv/
 venv/
 env/
 ENV/
 env.bak/
 venv.bak/
+virtualenv/
 
-# 2. Python Cache & Bytecode
+# ─── 5. Python Bytecode & Cache Files ───────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-
-# 3. Node.js Dependencies
-node_modules/
-.pnp
-.pnp.js
-
-# 4. Frontend Build Outputs & Tooling Caches
-dist/
-dist-ssr/
-build/
-.vite/
-.eslintcache
-
-# 5. Environment Variables & Secrets (Preserve .env.example)
-.env
-.env.*
-.env.local
-.env.*.local
-!.env.example
-!.env.*.example
-
-# 6. Database Files & Backups (SQLite & Local Dumps)
-*.db
-*.sqlite
-*.sqlite3
-*.db-journal
-*.sqlite-journal
-*.db-wal
-*.db-shm
-*.sqlite-wal
-*.sqlite-shm
-*.bak
-*.dump
-*.sql.gz
-
-# 7. Python Test, Coverage & Linting Caches
 .pytest_cache/
 .coverage
 .coverage.*
@@ -62,21 +72,57 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# 8. IDE & Editor Files
+# ─── 6. Frontend Build Outputs & Tooling Caches ─────────────
+dist/
+dist-ssr/
+build/
+out/
+.next/
+.vite/
+.eslintcache
+
+# ─── 7. SQLite Databases, WAL, SHM & Dump Files ─────────────
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.sqlite-journal
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+backend/*.db
+backend/*.sqlite
+backend/*.sqlite3
+backend/*.db-wal
+backend/*.db-shm
+*.bak
+*.dump
+*.sql.gz
+
+# ─── 8. Log Files & Temporary Files ─────────────────────────
+*.log
+logs/
+*.tmp
+*.temp
+.cache/
+.temp/
+tmp/
+
+# ─── 9. VS Code & Other IDE-Specific Files ──────────────────
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
 .idea/
 *.sublime-project
 *.sublime-workspace
 *.swp
 *.swo
 *~
-# VS Code (preserve shared configuration, ignore user/workspace state)
-.vscode/*
-!.vscode/settings.json
-!.vscode/extensions.json
-!.vscode/launch.json
-!.vscode/tasks.json
 
-# 9. Operating System Artifacts
+# ─── 10. Operating System Artifacts ─────────────────────────
 .DS_Store
 .DS_Store?
 ._*
@@ -88,34 +134,6 @@ ehthumbs.db
 desktop.ini
 $RECYCLE.BIN/
 
-# 10. Logs
-*.log
-logs/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# 11. Temporary Files & Generated Caches
-*.tmp
-*.temp
-.cache/
-.temp/
-tmp/
-
-# 12. Sensitive Credentials, API Keys & Certificates
-*.pem
-*.key
-*.cert
-*.crt
-*.pfx
-*.p12
-*service[-_]account*.json
-credentials.json
-client_secret*.json
-id_rsa*
-id_ed25519*
-
-# 13. Generated Machine Learning Models (auto-trained by backend on startup)
+# ─── 11. Machine Learning Generated Artifacts ───────────────
 *.pkl
 *.joblib

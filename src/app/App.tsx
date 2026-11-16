@@ -121,11 +121,7 @@ const fallbackInvoices: Invoice[] = [];
 const fallbackEmployees: Employee[] = [];
 const notifications: Array<{ id: number; type: string; title: string; desc: string; time: string; read: boolean }> = [];
 
-const chatHistory = [
-  { id: 1, title: "Operations Overview", time: "Today" },
-  { id: 2, title: "Inventory Restock Planning", time: "Yesterday" },
-  { id: 3, title: "Customer Churn Analysis", time: "This week" }
-];
+const chatHistory: Array<{ id: number; title: string; time: string }> = [];
 
 const suggestedPrompts = [
   "Show today's revenue breakdown",
@@ -276,7 +272,7 @@ function Sidebar({ page, setPage, collapsed, setCollapsed, user, onLogout }: {
         <div className="px-3 py-3 border-b border-white/10">
           <button className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 transition-colors">
             <Building2 size={14} className="text-slate-400 shrink-0" />
-            <span className="text-slate-300 text-xs font-medium truncate flex-1 text-left">{user?.company || "Nexus Commerce Ltd"}</span>
+            <span className="text-slate-300 text-xs font-medium truncate flex-1 text-left">{user?.company || "Operations Workspace"}</span>
             <ChevronDown size={12} className="text-slate-400 shrink-0" />
           </button>
         </div>
@@ -1394,28 +1390,20 @@ function DashboardPage({ setPage, user }: { setPage: (p: Page) => void; user: Us
   }, []);
 
   const kpis = stats?.kpis || {
-    today_revenue: "₹7,02,500", today_revenue_change: "+23%",
-    monthly_revenue: "₹52.8L", monthly_revenue_change: "+12%",
-    active_customers: "1,284", active_customers_change: "+8%",
-    pending_orders: "47", pending_orders_change: "-3%",
-    inventory_health: "78%", inventory_health_change: "-5%",
-    business_health: "82/100",
-    business_health_change: "Good"
+    today_revenue: "₹0", today_revenue_change: "0%",
+    monthly_revenue: "₹0", monthly_revenue_change: "0%",
+    active_customers: "0", active_customers_change: "0%",
+    pending_orders: "0", pending_orders_change: "0",
+    inventory_health: "0%", inventory_health_change: "No products",
+    business_health: "0/100",
+    business_health_change: "New Workspace"
   };
 
-  const currentRevenueData = salesOverview?.monthly || initialRevenueData;
-  const currentCategoryData = salesOverview?.product_categories || initialProductPieData;
-  const currentGrowthData = salesOverview?.customer_growth || initialCustomerGrowth;
+  const currentRevenueData = salesOverview?.monthly || [];
+  const currentCategoryData = salesOverview?.product_categories || [];
+  const currentGrowthData = salesOverview?.customer_growth || [];
 
   const lowStockItems = stats?.low_stock_alerts || [];
-
-  const fallbackActivity = [
-    { icon: DollarSign, text: "Invoice #INV-2026-001 paid by TechCorp India — ₹1,03,500", time: "2 min ago", color: "text-emerald-500" },
-    { icon: Users, text: "New customer: Gowrishankar Venkatesh (CloudShift India)", time: "34 min ago", color: "text-indigo-500" },
-    { icon: AlertTriangle, text: "Low stock alert: Analytics Dashboard (3 left)", time: "1 hr ago", color: "text-amber-500" },
-    { icon: ShoppingCart, text: "47 pending orders require processing", time: "2 hrs ago", color: "text-violet-500" },
-    { icon: UserCheck, text: "Pazhanivel Arumugam submitted leave request", time: "3 hrs ago", color: "text-blue-500" },
-  ];
 
   return (
     <div className="space-y-6">
@@ -1475,28 +1463,38 @@ function DashboardPage({ setPage, user }: { setPage: (p: Page) => void; user: Us
             </AreaChart>
           </ResponsiveContainer>
         </div>
-        <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+        <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm flex flex-col justify-between">
           <h2 className="text-sm font-semibold text-slate-800 mb-1">Sales by Category</h2>
-          <p className="text-xs text-slate-400 mb-4">This month</p>
-          <ResponsiveContainer width="100%" height={160}>
-            <RePieChart>
-              <Pie key="pie" data={currentCategoryData} cx="50%" cy="50%" innerRadius={45} outerRadius={70} paddingAngle={3} dataKey="value">
-                {currentCategoryData.map((e, i) => <Cell key={`dash-pie-${i}`} fill={e.color} />)}
-              </Pie>
-              <Tooltip key="tt" formatter={(v: any) => [`${v}%`, ""]} contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-            </RePieChart>
-          </ResponsiveContainer>
-          <div className="space-y-2 mt-2">
-            {currentCategoryData.map(({ name, value, color }) => (
-              <div key={name} className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full" style={{ background: color }} />
-                  <span className="text-slate-600">{name}</span>
-                </div>
-                <span className="font-semibold text-slate-700">{value}%</span>
+          <p className="text-xs text-slate-400 mb-4">Current distribution</p>
+          {currentCategoryData.length > 0 ? (
+            <>
+              <ResponsiveContainer width="100%" height={160}>
+                <RePieChart>
+                  <Pie key="pie" data={currentCategoryData} cx="50%" cy="50%" innerRadius={45} outerRadius={70} paddingAngle={3} dataKey="value">
+                    {currentCategoryData.map((e, i) => <Cell key={`dash-pie-${i}`} fill={e.color} />)}
+                  </Pie>
+                  <Tooltip key="tt" formatter={(v: any) => [`${v}%`, ""]} contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                </RePieChart>
+              </ResponsiveContainer>
+              <div className="space-y-2 mt-2">
+                {currentCategoryData.map(({ name, value, color }) => (
+                  <div key={name} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full" style={{ background: color }} />
+                      <span className="text-slate-600">{name}</span>
+                    </div>
+                    <span className="font-semibold text-slate-700">{value}%</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center py-6 text-center text-slate-400">
+              <Package size={28} className="mx-auto mb-2 text-slate-300" />
+              <p className="text-xs font-medium text-slate-600">No product sales yet</p>
+              <p className="text-[11px] text-slate-400 mt-0.5">Recorded invoice sales will categorize automatically.</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1658,8 +1656,8 @@ function BusinessHealthPage({ setPage }: { setPage: (p: Page) => void }) {
     fetchHealth();
   }, []);
 
-  const overallScore = healthData?.overall_score ?? healthData?.score ?? 72;
-  const healthLevel = healthData?.health_level ?? "Good";
+  const overallScore = healthData?.overall_score ?? healthData?.score ?? 0;
+  const healthLevel = healthData?.health_level ?? (loading ? "Loading..." : "New Workspace");
 
   const getLevelStyles = (level: string) => {
     switch (level) {
@@ -1690,6 +1688,13 @@ function BusinessHealthPage({ setPage }: { setPage: (p: Page) => void }) {
           ring: "text-orange-400",
           bar: "from-orange-500 to-rose-400",
           chip: "bg-orange-500/10 text-orange-400 border-orange-500/20",
+        };
+      case "New Workspace":
+        return {
+          badge: "bg-slate-500/20 text-slate-300 border-slate-500/40",
+          ring: "text-slate-400",
+          bar: "from-slate-500 to-indigo-500",
+          chip: "bg-slate-500/10 text-slate-400 border-slate-500/20",
         };
       default:
         return {
@@ -1730,18 +1735,9 @@ function BusinessHealthPage({ setPage }: { setPage: (p: Page) => void }) {
     employee_performance: "Company-wide employee performance ratings and attendance.",
   };
 
-  const defaultComponents = [
-    { key: "sales_growth", name: "Sales Growth", score: 88, weight: 0.20, weight_pct: "20%", metric: "+8.5% MoM", status: "Strong" },
-    { key: "profit_margin", name: "Profit Margin", score: 93, weight: 0.20, weight_pct: "20%", metric: "51.6% margin", status: "Healthy" },
-    { key: "inventory_health", name: "Inventory Health", score: 49, weight: 0.15, weight_pct: "15%", metric: "4/6 in stock", status: "Low Stock" },
-    { key: "customer_churn", name: "Customer Churn Risk", score: 65, weight: 0.15, weight_pct: "15%", metric: "35.0% avg churn", status: "Elevated Risk" },
-    { key: "outstanding_invoices", name: "Outstanding Invoices", score: 32, weight: 0.15, weight_pct: "15%", metric: "3% collected", status: "Action Needed" },
-    { key: "employee_performance", name: "Employee Performance", score: 91, weight: 0.15, weight_pct: "15%", metric: "90.4% avg rating", status: "High" },
-  ];
-
   const components = healthData?.components && Array.isArray(healthData.components)
     ? healthData.components
-    : defaultComponents;
+    : [];
 
   return (
     <div className="space-y-6">
@@ -1832,70 +1828,79 @@ function BusinessHealthPage({ setPage }: { setPage: (p: Page) => void }) {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {components.map((c: any) => {
-            const Icon = componentIcons[c.key] || Activity;
-            const targetPage = componentPages[c.key];
-            const desc = componentDescriptions[c.key] || "";
-            const isHealthy = c.score >= 75;
-            const isWarning = c.score >= 50 && c.score < 75;
+          {components.length > 0 ? (
+            components.map((c: any) => {
+              const Icon = componentIcons[c.key] || Activity;
+              const targetPage = componentPages[c.key];
+              const desc = componentDescriptions[c.key] || "";
+              const isHealthy = c.score >= 75;
+              const isWarning = c.score >= 50 && c.score < 75;
 
-            return (
-              <div
-                key={c.key}
-                className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm hover:shadow-md transition-all flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
-                        <Icon size={18} />
+              return (
+                <div
+                  key={c.key}
+                  className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm hover:shadow-md transition-all flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                          <Icon size={18} />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-semibold text-slate-800">{c.name}</h3>
+                          <span className="text-[11px] text-slate-400 font-medium">Weight: {c.weight_pct || `${Math.round((c.weight || 0.15) * 100)}%`}</span>
+                        </div>
                       </div>
-                      <div>
-                        <h3 className="text-sm font-semibold text-slate-800">{c.name}</h3>
-                        <span className="text-[11px] text-slate-400 font-medium">Weight: {c.weight_pct || `${Math.round((c.weight || 0.15) * 100)}%`}</span>
-                      </div>
-                    </div>
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded-md font-semibold border ${isHealthy
-                        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                        : isWarning
-                          ? "bg-amber-50 text-amber-700 border-amber-200"
-                          : "bg-red-50 text-red-600 border-red-200"
-                        }`}
-                    >
-                      {c.score}/100
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-slate-500 mb-4 leading-relaxed">{desc}</p>
-
-                  <div className="space-y-1.5 mb-4">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-slate-400 font-medium">Live Metric</span>
-                      <span className="font-semibold text-slate-700">{c.metric}</span>
-                    </div>
-                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all duration-500 ${isHealthy ? "bg-emerald-500" : isWarning ? "bg-amber-500" : "bg-red-500"
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded-md font-semibold border ${isHealthy
+                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                          : isWarning
+                            ? "bg-amber-50 text-amber-700 border-amber-200"
+                            : "bg-red-50 text-red-600 border-red-200"
                           }`}
-                        style={{ width: `${Math.min(100, Math.max(0, c.score))}%` }}
-                      />
+                      >
+                        {c.score}/100
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-slate-500 mb-4 leading-relaxed">{desc}</p>
+
+                    <div className="space-y-1.5 mb-4">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-slate-400 font-medium">Live Metric</span>
+                        <span className="font-semibold text-slate-700">{c.metric}</span>
+                      </div>
+                      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-500 ${isHealthy ? "bg-emerald-500" : isWarning ? "bg-amber-500" : "bg-red-500"}`}
+                          style={{ width: `${Math.min(100, Math.max(0, c.score))}%` }}
+                        />
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {targetPage && (
-                  <button
-                    onClick={() => setPage(targetPage)}
-                    className="w-full mt-2 py-2 px-3 rounded-xl bg-slate-50 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors group"
-                  >
-                    <span>View {c.name}</span>
-                    <ChevronRight size={13} className="text-slate-400 group-hover:text-indigo-600 transition-transform group-hover:translate-x-0.5" />
-                  </button>
-                )}
-              </div>
-            );
-          })}
+                  {targetPage && (
+                    <button
+                      onClick={() => setPage(targetPage)}
+                      className="w-full mt-2 py-2 px-3 rounded-xl bg-slate-50 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors group"
+                    >
+                      <span>View {c.name}</span>
+                      <ChevronRight size={13} className="text-slate-400 group-hover:text-indigo-600 transition-transform group-hover:translate-x-0.5" />
+                    </button>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            <div className="col-span-full bg-white rounded-2xl p-8 border border-slate-100 shadow-sm text-center">
+              <Activity size={36} className="text-indigo-400 mx-auto mb-3" />
+              <h3 className="text-sm font-semibold text-slate-700">No Operational Data Recorded Yet</h3>
+              <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                Your business health score is dynamically computed from live customer, inventory, invoice, and team metrics. Add business records across the workspace to evaluate operational strength.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1912,14 +1917,7 @@ function BusinessHealthPage({ setPage }: { setPage: (p: Page) => void }) {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {(healthData?.reasons && healthData.reasons.length > 0 ? healthData.reasons : [
-            { type: "positive" as const, text: "Sales revenue grew +8.5% MoM driven by enterprise renewals.", component: "sales_growth" },
-            { type: "positive" as const, text: "Profit margin is solid at 51.6% across active software offerings.", component: "profit_margin" },
-            { type: "negative" as const, text: "Inventory health decreased: multiple products are below reorder level.", component: "inventory_health" },
-            { type: "positive" as const, text: "Customer retention is stable with low overall churn probability.", component: "customer_churn" },
-            { type: "negative" as const, text: "Outstanding invoices: overdue collections require follow-up.", component: "outstanding_invoices" },
-            { type: "positive" as const, text: "Employee performance remains high at 90.4% average efficiency.", component: "employee_performance" },
-          ]).map((r, i) => {
+          {(healthData?.reasons && healthData.reasons.length > 0 ? healthData.reasons : []).map((r, i) => {
             const isPositive = r.type === "positive";
             return (
               <div
@@ -1939,6 +1937,12 @@ function BusinessHealthPage({ setPage }: { setPage: (p: Page) => void }) {
               </div>
             );
           })}
+          {(!healthData?.reasons || healthData.reasons.length === 0) && (
+            <div className="col-span-full py-6 text-center text-slate-400 text-xs">
+              <Sparkles size={20} className="mx-auto mb-2 text-slate-300" />
+              No score adjustments logged yet. Dynamic performance observations will appear as operations take place.
+            </div>
+          )}
         </div>
       </div>
 
@@ -2541,16 +2545,24 @@ function AICopilotPage() {
         </button>
         <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mt-1">Recent</p>
         <div className="space-y-1 flex-1 overflow-y-auto">
-          {chatHistory.map(({ id, title, time }, idx) => (
-            <button
-              key={id}
-              onClick={() => setActiveChat(idx)}
-              className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors ${activeChat === idx ? "bg-indigo-50 text-indigo-700" : "hover:bg-slate-50 text-slate-600"}`}
-            >
-              <p className="text-xs font-medium truncate">{title}</p>
-              <p className="text-xs text-slate-400 mt-0.5">{time}</p>
-            </button>
-          ))}
+          {chatHistory.length > 0 ? (
+            chatHistory.map(({ id, title, time }, idx) => (
+              <button
+                key={id}
+                onClick={() => setActiveChat(idx)}
+                className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors ${activeChat === idx ? "bg-indigo-50 text-indigo-700" : "hover:bg-slate-50 text-slate-600"}`}
+              >
+                <p className="text-xs font-medium truncate">{title}</p>
+                <p className="text-xs text-slate-400 mt-0.5">{time}</p>
+              </button>
+            ))
+          ) : (
+            <div className="py-8 text-center text-slate-400">
+              <Bot size={20} className="mx-auto mb-2 text-slate-300" />
+              <p className="text-xs">No prior chats</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">Start a conversation</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -2600,17 +2612,7 @@ function AICopilotPage() {
                     return <p key={j} className={j > 0 ? "mt-1" : ""} dangerouslySetInnerHTML={{ __html: line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') }} />;
                   })}
                 </div>
-                {msg.chart && (
-                  <div className="mt-3 bg-white rounded-xl p-3 border border-slate-200">
-                    <ResponsiveContainer width="100%" height={100}>
-                      <BarChart data={initialProductPieData.map(d => ({ name: d.name, value: d.value * 84.2 }))}>
-                        <Bar key="bar" dataKey="value" fill="#4f46e5" radius={[4, 4, 0, 0]} />
-                        <XAxis key="x" dataKey="name" tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
-                        <Tooltip key="tt" formatter={(v: any) => [`₹${v.toFixed(0)}`, ""]} contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
+
                 {msg.role === "ai" && (
                   <div className="mt-2 flex items-center gap-2">
                     {["Dive deeper", "Create report", "Take action"].map(a => (
@@ -3012,7 +3014,7 @@ function CustomersPage() {
               </div>
               <div>
                 <label className="block font-medium text-slate-700 mb-1">Company Name *</label>
-                <input required value={company} onChange={e => setCompany(e.target.value)} placeholder="TechCorp India Pvt. Ltd" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+                <input required value={company} onChange={e => setCompany(e.target.value)} placeholder="Acme Enterprise Pvt. Ltd" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -3056,18 +3058,29 @@ function SalesPage() {
     api.getSalesForecast().then(data => setForecast(data)).catch(() => { });
   }, []);
 
-  const monthlyData = salesOverview?.monthly || initialRevenueData;
-  const dailyData = salesOverview?.daily || initialDailyData;
-  const categoryData = salesOverview?.product_categories || initialProductPieData;
+  const monthlyData = salesOverview?.monthly || [];
+  const dailyData = salesOverview?.daily || [];
+  const categoryData = salesOverview?.product_categories || [];
+
+  const kpis = salesOverview?.kpis || {
+    total_revenue: "₹0",
+    total_revenue_change: "Not enough data",
+    total_orders: "0",
+    total_orders_change: "Not enough data",
+    avg_order_value: "₹0",
+    avg_order_value_change: "Not enough data",
+    conversion_rate: "Not available",
+    conversion_rate_change: "Not available"
+  };
 
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-4 gap-4">
         {[
-          { title: "Total Revenue", value: "₹52.8L", change: "+12%", icon: DollarSign, color: "bg-indigo-500" },
-          { title: "Total Orders", value: "892", change: "+8%", icon: ShoppingCart, color: "bg-violet-500" },
-          { title: "Avg Order Value", value: "₹59,100", change: "+4%", icon: TrendingUp, color: "bg-emerald-500" },
-          { title: "Conversion Rate", value: "4.8%", change: "+0.6%", icon: Target, color: "bg-cyan-500" },
+          { title: "Total Revenue", value: kpis.total_revenue, change: kpis.total_revenue_change, icon: DollarSign, color: "bg-indigo-500" },
+          { title: "Total Orders", value: kpis.total_orders, change: kpis.total_orders_change, icon: ShoppingCart, color: "bg-violet-500" },
+          { title: "Avg Order Value", value: kpis.avg_order_value, change: kpis.avg_order_value_change, icon: TrendingUp, color: "bg-emerald-500" },
+          { title: "Conversion Rate", value: kpis.conversion_rate, change: kpis.conversion_rate_change, icon: Target, color: "bg-cyan-500" },
         ].map(c => <KPICard key={c.title} {...c} />)}
       </div>
 
@@ -3092,72 +3105,115 @@ function SalesPage() {
             </AreaChart>
           </ResponsiveContainer>
         </div>
-        <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+        <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm flex flex-col justify-between">
           <h2 className="text-sm font-semibold text-slate-800 mb-4">Product Performance</h2>
-          <ResponsiveContainer width="100%" height={200}>
-            <RePieChart>
-              <Pie key="pie" data={categoryData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={4} dataKey="value">
-                {categoryData.map((e, i) => <Cell key={`sales-pie-${i}`} fill={e.color} />)}
-              </Pie>
-              <Tooltip key="tt" formatter={(v: any) => [`${v}%`, ""]} contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-            </RePieChart>
-          </ResponsiveContainer>
-          <div className="space-y-2">
-            {categoryData.map(({ name, value, color }) => (
-              <div key={name} className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full" style={{ background: color }} />
-                  <span className="text-slate-600">{name}</span>
-                </div>
-                <span className="font-semibold text-slate-700">{value}%</span>
+          {categoryData.length > 0 ? (
+            <>
+              <ResponsiveContainer width="100%" height={200}>
+                <RePieChart>
+                  <Pie key="pie" data={categoryData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={4} dataKey="value">
+                    {categoryData.map((e, i) => <Cell key={`sales-pie-${i}`} fill={e.color} />)}
+                  </Pie>
+                  <Tooltip key="tt" formatter={(v: any) => [`${v}%`, ""]} contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                </RePieChart>
+              </ResponsiveContainer>
+              <div className="space-y-2">
+                {categoryData.map(({ name, value, color }) => (
+                  <div key={name} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full" style={{ background: color }} />
+                      <span className="text-slate-600">{name}</span>
+                    </div>
+                    <span className="font-semibold text-slate-700">{value}%</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center py-10 text-center text-slate-400">
+              <Package size={32} className="text-slate-300 mb-2" />
+              <p className="text-xs font-medium text-slate-600">No product sales recorded yet</p>
+              <p className="text-[11px] text-slate-400 mt-1 max-w-xs">Product sales distribution will populate as invoices with line items are recorded.</p>
+            </div>
+          )}
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-5">
         <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
-          <h2 className="text-sm font-semibold text-slate-800 mb-4">Daily Sales Heatmap</h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-semibold text-slate-800">Daily Sales Heatmap</h2>
+            <span className="text-[11px] text-slate-400">Past 28 Days Activity</span>
+          </div>
           <div className="grid grid-cols-7 gap-1.5">
             {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => (
-              <div key={i} className="text-center text-xs text-slate-400 mb-1">{d}</div>
+              <div key={i} className="text-center text-xs font-semibold text-slate-400 mb-1">{d}</div>
             ))}
-            {Array.from({ length: 28 }).map((_, i) => {
-              const intensity = (i * 13 + 17) % 100 / 100;
-              const bg = intensity > 0.8 ? "bg-indigo-700" : intensity > 0.6 ? "bg-indigo-500" : intensity > 0.4 ? "bg-indigo-300" : intensity > 0.2 ? "bg-indigo-100" : "bg-slate-100";
-              return <div key={i} className={`aspect-square rounded ${bg}`} title={`₹${(intensity * 80000).toFixed(0)}`} />;
+            {(salesOverview?.heatmap && salesOverview.heatmap.length > 0 ? salesOverview.heatmap : Array.from({ length: 28 }).map((_, i) => ({
+              date: "",
+              sales: 0,
+              orders: 0,
+              intensity: 0
+            }))).map((day, i) => {
+              const intensity = day.intensity;
+              const bg = intensity > 0.8
+                ? "bg-indigo-700"
+                : intensity > 0.6
+                  ? "bg-indigo-500"
+                  : intensity > 0.4
+                    ? "bg-indigo-300"
+                    : intensity > 0
+                      ? "bg-indigo-100"
+                      : "bg-slate-100";
+              const title = day.sales > 0
+                ? `${day.date}: ₹${day.sales.toLocaleString("en-IN")} (${day.orders} order${day.orders === 1 ? '' : 's'})`
+                : `${day.date || 'Day ' + (i + 1)}: ₹0 (No sales)`;
+              return <div key={i} className={`aspect-square rounded transition-all hover:scale-110 cursor-pointer ${bg}`} title={title} />;
             })}
           </div>
         </div>
-        <div className="bg-gradient-to-br from-indigo-50 to-violet-50 rounded-2xl p-5 border border-indigo-100">
+        <div className="bg-gradient-to-br from-indigo-50 to-violet-50 rounded-2xl p-5 border border-indigo-100 flex flex-col justify-between">
           <div className="flex items-center gap-2 mb-4">
             <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center">
               <Sparkles size={14} className="text-white" />
             </div>
-            <h2 className="text-sm font-semibold text-slate-800">AI Sales Forecast (Random Forest Model)</h2>
+            <h2 className="text-sm font-semibold text-slate-800">AI Sales Forecast (ML Predictive Model)</h2>
           </div>
-          <div className="space-y-3">
-            {[
-              { label: "August Forecast", value: forecast?.monthly_forecasts?.[0]?.predicted_revenue_formatted || "₹56.8L", delta: forecast?.monthly_forecasts?.[0]?.delta || "+7.6%", confidence: forecast?.monthly_forecasts?.[0]?.confidence || 91 },
-              { label: "Q3 Forecast", value: forecast?.q3_forecast || "₹1.64Cr", delta: forecast?.q3_delta || "+9.2%", confidence: forecast?.q3_confidence || 87 },
-              { label: "Annual Target", value: forecast?.annual_target || "₹6.5Cr", delta: forecast?.annual_delta || "On track", confidence: forecast?.annual_confidence || 94 },
-            ].map(({ label, value, delta, confidence }) => (
-              <div key={label} className="bg-white rounded-xl p-3.5 border border-indigo-100">
-                <div className="flex justify-between items-center mb-2">
-                  <p className="text-xs font-semibold text-slate-700">{label}</p>
-                  <Badge label={delta} variant={delta.includes("+") ? "success" : "info"} />
-                </div>
-                <p className="text-xl font-bold text-slate-800 mb-2">{value}</p>
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-gradient-to-r from-indigo-400 to-violet-500 rounded-full" style={{ width: `${confidence}%` }} />
+          {forecast?.has_forecast && forecast.monthly_forecasts && forecast.monthly_forecasts.length > 0 ? (
+            <div className="space-y-3">
+              {forecast.monthly_forecasts.map(({ month, predicted_revenue_formatted, delta, confidence }) => (
+                <div key={month} className="bg-white rounded-xl p-3.5 border border-indigo-100">
+                  <div className="flex justify-between items-center mb-2">
+                    <p className="text-xs font-semibold text-slate-700">{month}</p>
+                    <Badge label={delta} variant={delta.includes("+") ? "success" : "info"} />
                   </div>
-                  <span className="text-xs text-slate-500">{confidence}% ML confidence</span>
+                  <p className="text-xl font-bold text-slate-800 mb-2">{predicted_revenue_formatted}</p>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-gradient-to-r from-indigo-400 to-violet-500 rounded-full" style={{ width: `${confidence}%` }} />
+                    </div>
+                    <span className="text-xs text-slate-500">{confidence}% statistical confidence</span>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+              {forecast.q3_forecast && (
+                <div className="bg-white/80 rounded-xl p-3 border border-indigo-100 flex items-center justify-between text-xs">
+                  <span className="text-slate-600 font-medium">Q3 Target Projection: <strong className="text-slate-800">{forecast.q3_forecast}</strong></span>
+                  <span className="text-indigo-600 font-semibold">{forecast.q3_delta} ({forecast.q3_confidence}% conf.)</span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="bg-white rounded-xl p-6 border border-indigo-100 text-center flex-1 flex flex-col items-center justify-center">
+              <TrendingUp size={32} className="text-indigo-300 mb-3" />
+              <p className="text-sm font-semibold text-slate-700 mb-1">
+                {forecast?.message || "Not enough sales data to generate a forecast."}
+              </p>
+              <p className="text-xs text-slate-500 max-w-sm">
+                ML models require at least 3 historical transaction records to train predictive regression trajectories.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -3686,7 +3742,12 @@ function InvoicesPage() {
     setErrorMessage(null);
     setLoading(true);
     try {
-      const firstCustomer = customersList[0]?.company || customersList[0]?.name || "TechCorp India Pvt. Ltd";
+      if (!customersList || customersList.length === 0) {
+        alert("Cannot AI-generate invoice: Please register at least one customer first.");
+        setLoading(false);
+        return;
+      }
+      const firstCustomer = customersList[0]?.company || customersList[0]?.name || "Client Account";
       const availableProd = productsList.find(p => p.stock >= 2) || productsList[0];
 
       if (!availableProd || availableProd.stock < 1) {
@@ -4331,43 +4392,89 @@ function EmployeesPage() {
         </div>
       </div>
 
-      {/* Payroll summary */}
-      <div className="grid grid-cols-3 gap-5">
-        <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
-          <h2 className="text-sm font-semibold text-slate-800 mb-4">Payroll Summary — July 2026</h2>
-          <div className="space-y-2.5">
-            {[
-              { label: "Base Salaries", value: "₹41,70,000" },
-              { label: "Bonuses", value: "₹2,04,000" },
-              { label: "Benefits", value: "₹3,18,000" },
-              { label: "Tax Withheld (TDS)", value: "₹11,88,000" },
-              { label: "Net Payout", value: "₹35,04,000" },
-            ].map(({ label, value }) => (
-              <div key={label} className="flex justify-between text-sm">
-                <span className="text-slate-500">{label}</span>
-                <span className={`font-semibold ${label === "Net Payout" ? "text-indigo-600" : "text-slate-800"}`}>{value}</span>
+      {/* Payroll summary & Dynamic AI HR Insights */}
+      {(() => {
+        const currentMonthName = new Date().toLocaleString("en-US", { month: "long", year: "numeric" });
+        const totalBaseSalary = employeesList.reduce((sum, e) => {
+          const num = parseInt(e.salary ? e.salary.replace(/[^0-9]/g, "") : "0") || 0;
+          return sum + num;
+        }, 0);
+        const estimatedBonus = totalBaseSalary > 0 ? Math.round(totalBaseSalary * 0.05) : 0;
+        const estimatedBenefits = totalBaseSalary > 0 ? Math.round(totalBaseSalary * 0.08) : 0;
+        const taxWithheld = totalBaseSalary > 0 ? Math.round(totalBaseSalary * 0.10) : 0;
+        const netPayout = Math.max(0, totalBaseSalary + estimatedBonus - taxWithheld);
+
+        const payrollItems = [
+          { label: "Base Salaries", value: `₹${totalBaseSalary.toLocaleString("en-IN")}` },
+          { label: "Bonuses", value: `₹${estimatedBonus.toLocaleString("en-IN")}` },
+          { label: "Benefits", value: `₹${estimatedBenefits.toLocaleString("en-IN")}` },
+          { label: "Tax Withheld (TDS)", value: `₹${taxWithheld.toLocaleString("en-IN")}` },
+          { label: "Net Payout", value: `₹${netPayout.toLocaleString("en-IN")}` },
+        ];
+
+        const dynamicHRInsights: Array<{ text: string; type: "positive" | "warning" | "info" }> = [];
+        if (employeesList.length > 0) {
+          const topPerformer = [...employeesList].sort((a, b) => ((b.performance || 0) + (b.attendance || 0)) - ((a.performance || 0) + (a.attendance || 0)))[0];
+          if (topPerformer) {
+            dynamicHRInsights.push({
+              text: `${topPerformer.name} (${topPerformer.role}) leads the organization with ${topPerformer.attendance}% attendance and ${topPerformer.performance}% performance rating.`,
+              type: "positive"
+            });
+          }
+          const atRiskEmp = employeesList.find(e => e.status === "On Leave" || (e.attendance && e.attendance < 85) || (e.performance && e.performance < 75));
+          if (atRiskEmp) {
+            dynamicHRInsights.push({
+              text: `${atRiskEmp.name} (${atRiskEmp.role}) currently shows ${atRiskEmp.attendance}% attendance (${atRiskEmp.status}). Recommended: schedule a 1-on-1 check-in.`,
+              type: "warning"
+            });
+          }
+          const avgAttendance = Math.round(employeesList.reduce((s, e) => s + (e.attendance || 0), 0) / employeesList.length);
+          dynamicHRInsights.push({
+            text: `Team-wide attendance is tracking at ${avgAttendance}% across ${employeesList.length} staff member${employeesList.length === 1 ? '' : 's'}.`,
+            type: "info"
+          });
+          dynamicHRInsights.push({
+            text: `Workforce deployment is operating at ${employeesList.filter(e => e.status === "Active").length}/${employeesList.length} active capacity.`,
+            type: "positive"
+          });
+        }
+
+        return (
+          <div className="grid grid-cols-3 gap-5">
+            <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+              <h2 className="text-sm font-semibold text-slate-800 mb-4">Payroll Summary — {currentMonthName}</h2>
+              <div className="space-y-2.5">
+                {payrollItems.map(({ label, value }) => (
+                  <div key={label} className="flex justify-between text-sm">
+                    <span className="text-slate-500">{label}</span>
+                    <span className={`font-semibold ${label === "Net Payout" ? "text-indigo-600" : "text-slate-800"}`}>{value}</span>
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
+            <div className="col-span-2 bg-gradient-to-br from-indigo-50 to-violet-50 rounded-2xl p-5 border border-indigo-100 flex flex-col justify-between">
+              <div className="flex items-center gap-2 mb-4">
+                <Bot size={16} className="text-indigo-600" />
+                <h2 className="text-sm font-semibold text-slate-800">AI HR Insights</h2>
+              </div>
+              {dynamicHRInsights.length > 0 ? (
+                <div className="grid grid-cols-2 gap-3">
+                  {dynamicHRInsights.map(({ text, type }, i) => {
+                    const colors = { positive: "text-emerald-700 bg-emerald-50 border-emerald-200", warning: "text-amber-700 bg-amber-50 border-amber-200", info: "text-indigo-700 bg-indigo-50 border-indigo-200" };
+                    return <div key={i} className={`text-xs p-3 rounded-xl border leading-relaxed ${colors[type]}`}>{text}</div>;
+                  })}
+                </div>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center py-6 text-center text-slate-400">
+                  <UserCheck size={28} className="text-indigo-300 mb-2" />
+                  <p className="text-xs font-semibold text-slate-700">No Employee Records Yet</p>
+                  <p className="text-[11px] text-slate-400 mt-1 max-w-sm">Add employee profiles to compute dynamic payroll distribution and attendance insights.</p>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-        <div className="col-span-2 bg-gradient-to-br from-indigo-50 to-violet-50 rounded-2xl p-5 border border-indigo-100">
-          <div className="flex items-center gap-2 mb-4">
-            <Bot size={16} className="text-indigo-600" />
-            <h2 className="text-sm font-semibold text-slate-800">AI HR Insights</h2>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { text: "Valarmathi Subramanian has the highest attendance record (97%) and performance score (92%). Consider for senior promotion.", type: "positive" },
-              { text: "Pazhanivel Arumugam's attendance dropped to 82% this month — below team average. Schedule check-in.", type: "warning" },
-              { text: "Engineering team is understaffed by an estimated 2 FTEs based on current sprint velocity.", type: "info" },
-              { text: "Avg tenure is 2.4 years. Q3 attrition risk is low at 8%. No critical flight risks detected.", type: "positive" },
-            ].map(({ text, type }, i) => {
-              const colors = { positive: "text-emerald-700 bg-emerald-50 border-emerald-200", warning: "text-amber-700 bg-amber-50 border-amber-200", info: "text-indigo-700 bg-indigo-50 border-indigo-200" };
-              return <div key={i} className={`text-xs p-3 rounded-xl border leading-relaxed ${colors[type as keyof typeof colors]}`}>{text}</div>;
-            })}
-          </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* Add / Edit Employee Modal */}
       {isModalOpen && (
@@ -4447,15 +4554,16 @@ function downloadCSV(filename: string, headers: string[], rows: (string | number
   URL.revokeObjectURL(url);
 }
 
-function downloadPDF(reportName: string, rows: { label: string; value: string }[]) {
+function downloadPDF(reportName: string, rows: { label: string; value: string }[], companyName?: string) {
   const date = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
+  const comp = companyName || "AI Business Operations Copilot";
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${reportName}</title>
   <style>body{font-family:Arial,sans-serif;margin:40px;color:#1e293b}h1{color:#4f46e5;font-size:22px;margin-bottom:4px}
   .meta{color:#64748b;font-size:13px;margin-bottom:28px}table{width:100%;border-collapse:collapse;font-size:14px}
   th{background:#f1f5f9;text-align:left;padding:10px 14px;font-weight:600;color:#475569;border-bottom:2px solid #e2e8f0}
   td{padding:10px 14px;border-bottom:1px solid #f1f5f9}tr:hover td{background:#f8fafc}
   .footer{margin-top:32px;font-size:11px;color:#94a3b8;text-align:center}</style></head>
-  <body><h1>${reportName}</h1><p class="meta">Nexus Commerce Pvt. Ltd &nbsp;|&nbsp; Generated: ${date}</p>
+  <body><h1>${reportName}</h1><p class="meta">${comp} &nbsp;|&nbsp; Generated: ${date}</p>
   <table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>
   ${rows.map(r => `<tr><td>${r.label}</td><td>${r.value}</td></tr>`).join("")}
   </tbody></table><p class="footer">AI Business Operations Copilot &mdash; Confidential</p></body></html>`;
@@ -4487,17 +4595,29 @@ function ReportsPage({ user }: { user?: UserSession | null }) {
       .catch(() => { });
   }, [activeReport]);
 
+  const [reportHistory, setReportHistory] = useState<Array<{ name: string; date: string; by: string; type: string; key: string }>>([]);
+
+  const authorName = user?.name || "Operations Team";
+
   function handleCSV() {
     if (!reportDataState) return;
     downloadCSV(activeReport.replace(/\s+/g, "_") + ".csv", reportDataState.headers, reportDataState.rows);
+    const dateStr = new Date().toLocaleDateString("en-IN", { month: "short", day: "2-digit", year: "numeric" });
+    setReportHistory(prev => [
+      { name: `${activeReport} (Excel)`, date: dateStr, by: authorName, type: activeReport.split(" ")[0], key: activeReport },
+      ...prev
+    ]);
   }
 
   function handlePDF() {
     if (!reportDataState) return;
-    downloadPDF(activeReport, reportDataState.summary);
+    downloadPDF(activeReport, reportDataState.summary, user?.company);
+    const dateStr = new Date().toLocaleDateString("en-IN", { month: "short", day: "2-digit", year: "numeric" });
+    setReportHistory(prev => [
+      { name: `${activeReport} (PDF)`, date: dateStr, by: authorName, type: activeReport.split(" ")[0], key: activeReport },
+      ...prev
+    ]);
   }
-
-  const authorName = user?.name || "Operations Team";
 
   return (
     <div className="space-y-5">
@@ -4580,25 +4700,30 @@ function ReportsPage({ user }: { user?: UserSession | null }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {[
-                { name: "July Revenue Report", date: "Jul 29, 2026", by: "AI Auto-generated", type: "Revenue", key: "Revenue Report" },
-                { name: "Customer Churn Analysis", date: "Jul 25, 2026", by: authorName, type: "Customer", key: "Customer Report" },
-                { name: "Q2 Inventory Summary", date: "Jul 1, 2026", by: authorName, type: "Inventory", key: "Inventory Report" },
-                { name: "June Payroll Report", date: "Jun 30, 2026", by: "AI Auto-generated", type: "Employee", key: "Employee Report" },
-              ].map(r => (
-                <tr key={r.name} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 text-sm font-medium text-slate-800">{r.name}</td>
-                  <td className="px-4 py-3 text-sm text-slate-500">{r.date}</td>
-                  <td className="px-4 py-3 text-sm text-slate-600">{r.by}</td>
-                  <td className="px-4 py-3"><Badge label={r.type} variant="info" /></td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => setActiveReport(r.key)} className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600" title="View"><Eye size={13} /></button>
-                      <button onClick={handleCSV} className="p-1.5 rounded-lg hover:bg-emerald-50 text-slate-400 hover:text-emerald-600" title="Download CSV"><Download size={13} /></button>
-                    </div>
+              {reportHistory.length > 0 ? (
+                reportHistory.map(r => (
+                  <tr key={r.name} className="hover:bg-slate-50">
+                    <td className="px-4 py-3 text-sm font-medium text-slate-800">{r.name}</td>
+                    <td className="px-4 py-3 text-sm text-slate-500">{r.date}</td>
+                    <td className="px-4 py-3 text-sm text-slate-600">{r.by}</td>
+                    <td className="px-4 py-3"><Badge label={r.type} variant="info" /></td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => setActiveReport(r.key)} className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600" title="View"><Eye size={13} /></button>
+                        <button onClick={handleCSV} className="p-1.5 rounded-lg hover:bg-emerald-50 text-slate-400 hover:text-emerald-600" title="Download CSV"><Download size={13} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={5} className="py-8 text-center text-slate-400">
+                    <BarChart3 size={24} className="mx-auto mb-2 text-slate-300" />
+                    <p className="text-xs font-medium text-slate-600">No reports generated yet</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Click 'PDF' or 'Excel' on any template above to export live records.</p>
                   </td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>
@@ -4631,15 +4756,19 @@ const miniTrend = (color: string, up: boolean) => (
   </svg>
 );
 
-function ProfitAnalyzerPage() {
+function ProfitAnalyzerPage({ user }: { user?: UserSession | null }) {
   const [search, setSearch] = useState("");
   const [catFilter, setCatFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
   const [productsData, setProductsData] = useState<ProfitProduct[]>([]);
+  const [salesOverview, setSalesOverview] = useState<SalesOverview | null>(null);
 
   useEffect(() => {
     api.getProfitProducts()
       .then(data => setProductsData(data))
+      .catch(() => { });
+    api.getSalesOverview()
+      .then(data => setSalesOverview(data))
       .catch(() => { });
   }, []);
 
@@ -4670,14 +4799,12 @@ function ProfitAnalyzerPage() {
   const totalProfit = rows.reduce((s, r) => s + r.profit, 0);
   const avgMargin = Math.round((totalProfit / Math.max(1, totalRevenue)) * 100);
 
-  const monthlyRevenue = [
-    { month: "Feb", revenue: 3820000, cost: 2240000, profit: 1580000 },
-    { month: "Mar", revenue: 4150000, cost: 2410000, profit: 1740000 },
-    { month: "Apr", revenue: 4480000, cost: 2590000, profit: 1890000 },
-    { month: "May", revenue: 4920000, cost: 2850000, profit: 2070000 },
-    { month: "Jun", revenue: 5310000, cost: 3060000, profit: 2250000 },
-    { month: "Jul", revenue: totalRevenue, cost: totalCost, profit: totalProfit },
-  ];
+  const monthlyRevenue = salesOverview?.monthly?.map(m => ({
+    month: m.month,
+    revenue: m.revenue,
+    cost: m.expenses,
+    profit: m.profit
+  })) || [];
 
   const topProducts = [...rows].sort((a, b) => b.profit - a.profit).slice(0, 5);
   const lowProducts = [...rows].sort((a, b) => a.margin - b.margin).slice(0, 5);
@@ -4702,6 +4829,7 @@ function ProfitAnalyzerPage() {
 
   function handleExportPDF() {
     const date = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
+    const compName = user?.company || "AI Business Operations Copilot";
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Profit Analyzer Report</title>
     <style>body{font-family:Arial,sans-serif;margin:40px;color:#1e293b}h1{color:#4f46e5;font-size:22px}
     .meta{color:#64748b;font-size:13px;margin-bottom:24px}.kpi{display:flex;gap:20px;margin-bottom:28px}
@@ -4713,7 +4841,7 @@ function ProfitAnalyzerPage() {
     td{padding:9px 12px;border-bottom:1px solid #f1f5f9}
     .footer{margin-top:32px;font-size:11px;color:#94a3b8;text-align:center}</style></head>
     <body><h1>Profit Analyzer Report</h1>
-    <p class="meta">Nexus Commerce Pvt. Ltd &nbsp;|&nbsp; Generated: ${date}</p>
+    <p class="meta">${compName} &nbsp;|&nbsp; Generated: ${date}</p>
     <div class="kpi">
       <div class="kpi-card"><h3>Total Revenue</h3><p>${fmt(totalRevenue)}</p></div>
       <div class="kpi-card"><h3>Total Cost</h3><p>${fmt(totalCost)}</p></div>
@@ -4730,6 +4858,15 @@ function ProfitAnalyzerPage() {
     URL.revokeObjectURL(url);
   }
 
+  const handleAIProfitAnalysis = () => {
+    if (rows.length === 0) {
+      alert("No product data recorded. Add products to analyze profit optimization.");
+      return;
+    }
+    const highestMargin = [...rows].sort((a, b) => b.margin - a.margin)[0];
+    alert(`AI Profit Optimization: Promoting ${highestMargin.name} (${highestMargin.margin}% gross margin) provides highest margin efficiency.`);
+  };
+
   return (
     <div className="space-y-6">
       {/* Page Header */}
@@ -4741,19 +4878,19 @@ function ProfitAnalyzerPage() {
         <div className="flex items-center gap-2 flex-wrap justify-end">
           <button onClick={handleExportPDF} className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-xl text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors"><Download size={13} />PDF</button>
           <button onClick={handleExportCSV} className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 border border-emerald-100 rounded-xl text-xs font-medium text-emerald-700 hover:bg-emerald-100 transition-colors"><Download size={13} />Excel</button>
-          <GradientButton size="sm" onClick={() => alert("AI Profit Optimizer: Promoting Workflow AI Assistant projected to add ₹18L+ to Q3 bottom line.")}><Sparkles size={13} />AI Profit Analysis</GradientButton>
+          <GradientButton size="sm" onClick={handleAIProfitAnalysis}><Sparkles size={13} />AI Profit Analysis</GradientButton>
         </div>
       </div>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-6 gap-4">
         {[
-          { title: "Total Revenue", value: fmt(totalRevenue), change: "+12.4%", up: true, icon: DollarSign, color: "text-indigo-600", bg: "bg-indigo-50" },
-          { title: "Total Cost", value: fmt(totalCost), change: "+8.1%", up: false, icon: ShoppingCart, color: "text-amber-600", bg: "bg-amber-50" },
-          { title: "Total Profit", value: fmt(totalProfit), change: "+18.7%", up: true, icon: TrendingUp, color: "text-emerald-600", bg: "bg-emerald-50" },
-          { title: "Profit Margin", value: avgMargin + "%", change: "+2.1%", up: true, icon: Activity, color: "text-violet-600", bg: "bg-violet-50" },
-          { title: "Profit Status", value: avgMargin >= 50 ? "Excellent" : "Good", change: "Stable", up: true, icon: Award, color: "text-cyan-600", bg: "bg-cyan-50" },
-          { title: "Monthly Growth", value: "+12.4%", change: "vs Jun", up: true, icon: BarChart2, color: "text-rose-600", bg: "bg-rose-50" },
+          { title: "Total Revenue", value: fmt(totalRevenue), change: salesOverview?.kpis?.total_revenue_change || (totalRevenue > 0 ? "Actual Rev" : "Not enough data"), up: true, icon: DollarSign, color: "text-indigo-600", bg: "bg-indigo-50" },
+          { title: "Total Cost", value: fmt(totalCost), change: totalCost > 0 ? "COGS Tracked" : "₹0 recorded", up: false, icon: ShoppingCart, color: "text-amber-600", bg: "bg-amber-50" },
+          { title: "Total Profit", value: fmt(totalProfit), change: totalProfit >= 0 ? "Positive Return" : "Loss", up: totalProfit >= 0, icon: TrendingUp, color: "text-emerald-600", bg: "bg-emerald-50" },
+          { title: "Profit Margin", value: avgMargin + "%", change: avgMargin >= 40 ? "Healthy Margin" : (totalRevenue > 0 ? "Low Margin" : "Not enough data"), up: avgMargin >= 30, icon: Activity, color: "text-violet-600", bg: "bg-violet-50" },
+          { title: "Profit Status", value: totalRevenue > 0 ? (avgMargin >= 50 ? "Excellent" : avgMargin >= 25 ? "Good" : "Average") : "New Workspace", change: totalRevenue > 0 ? "Live Metric" : "Awaiting Data", up: avgMargin >= 25, icon: Award, color: "text-cyan-600", bg: "bg-cyan-50" },
+          { title: "Growth Trend", value: salesOverview?.kpis?.total_revenue_change || "Not enough data", change: "vs prior period", up: !salesOverview?.kpis?.total_revenue_change?.includes("-"), icon: BarChart2, color: "text-rose-600", bg: "bg-rose-50" },
         ].map(({ title, value, change, up, icon: Icon, color, bg }) => (
           <div key={title} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex flex-col gap-3">
             <div className="flex items-center justify-between">
@@ -5002,15 +5139,15 @@ function SettingsPage({ user }: { user?: UserSession | null }) {
             <div className="flex items-center gap-5 p-4 bg-slate-50 rounded-2xl">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center text-white text-xl font-bold">{getInitials(user?.company || user?.name || "NC")}</div>
               <div>
-                <p className="font-semibold text-slate-800">{user?.company || "Nexus Commerce Pvt. Ltd"}</p>
-                <p className="text-sm text-slate-500">{user?.biz_type || "E-commerce"} · Founded 2020</p>
+                <p className="font-semibold text-slate-800">{user?.company || "Operations Workspace"}</p>
+                <p className="text-sm text-slate-500">{user?.biz_type || "Business Operations"}</p>
                 <button className="text-xs text-indigo-600 mt-1 hover:text-indigo-700">Change logo</button>
               </div>
             </div>
             {[
-              { label: "Company Name", value: user?.company || "Nexus Commerce Pvt. Ltd" },
-              { label: "Business Type", value: user?.biz_type || "E-commerce" },
-              { label: "Website", value: "nexuscommerce.in" },
+              { label: "Company Name", value: user?.company || "" },
+              { label: "Business Type", value: user?.biz_type || "Business Operations" },
+              { label: "Website", value: user?.company ? `${user.company.toLowerCase().replace(/[^a-z0-9]/g, '')}.com` : "" },
               { label: "Country", value: "India" },
             ].map(({ label, value }) => (
               <div key={label}>
@@ -5093,8 +5230,13 @@ function SettingsPage({ user }: { user?: UserSession | null }) {
 
 function ProfilePage({ setPage, user }: { setPage: (p: Page) => void; user: UserSession | null }) {
   const displayName = user?.name || "User";
-  const displayEmail = user?.email || (user?.name ? `${user.name.toLowerCase().replace(/\s+/g, '')}@nexuscommerce.in` : "user@nexuscommerce.in");
-  const displayCompany = user?.company || "Nexus Commerce Pvt. Ltd";
+  const displayEmail = user?.email || "";
+  const displayCompany = user?.company || "Operations Workspace";
+  const [activity, setActivity] = useState<DashboardActivity[]>([]);
+
+  useEffect(() => {
+    api.getDashboardActivity().then(data => setActivity(data)).catch(() => { });
+  }, []);
 
   return (
     <div className="max-w-4xl space-y-5">
@@ -5106,20 +5248,19 @@ function ProfilePage({ setPage, user }: { setPage: (p: Page) => void; user: User
               {getInitials(displayName)}
             </div>
             <div className="flex gap-2 mt-2">
-              <GradientButton variant="outline" size="sm" onClick={() => alert("Profile updated")}><Edit2 size={13} />Edit Profile</GradientButton>
+              <GradientButton variant="outline" size="sm" onClick={() => setPage("settings")}><Edit2 size={13} />Account Settings</GradientButton>
             </div>
           </div>
           <div className="flex items-start justify-between">
             <div>
               <h2 className="text-lg font-bold text-slate-800">{displayName}</h2>
-              <p className="text-slate-500 text-sm">CEO & Founder · {displayCompany}</p>
+              <p className="text-slate-500 text-sm">{user?.biz_type || "Operations Lead"} · {displayCompany}</p>
               <div className="flex items-center gap-4 mt-3">
-                <span className="flex items-center gap-1.5 text-xs text-slate-500"><Mail size={12} />{displayEmail}</span>
-                <span className="flex items-center gap-1.5 text-xs text-slate-500"><Phone size={12} />+91 98421 73056</span>
-                <span className="flex items-center gap-1.5 text-xs text-slate-500"><MapPin size={12} />Chennai, Tamil Nadu</span>
+                {displayEmail && <span className="flex items-center gap-1.5 text-xs text-slate-500"><Mail size={12} />{displayEmail}</span>}
+                <span className="flex items-center gap-1.5 text-xs text-slate-500"><Shield size={12} />Verified Account</span>
               </div>
             </div>
-            <Badge label="Free Plan" variant="info" />
+            <Badge label="Active Workspace" variant="info" />
           </div>
         </div>
       </div>
@@ -5127,37 +5268,40 @@ function ProfilePage({ setPage, user }: { setPage: (p: Page) => void; user: User
       <div className="grid grid-cols-3 gap-5">
         <div className="col-span-2 grid grid-cols-3 gap-4">
           {[
-            { label: "Days Active", value: "284", icon: Calendar, color: "bg-indigo-100 text-indigo-600" },
-            { label: "AI Queries", value: "1,842", icon: Bot, color: "bg-violet-100 text-violet-600" },
-            { label: "Reports Generated", value: "47", icon: BarChart3, color: "bg-emerald-100 text-emerald-600" },
+            { label: "Account Status", value: "Active", icon: CheckCircle, color: "bg-indigo-100 text-indigo-600" },
+            { label: "Data Isolation", value: "Verified", icon: Shield, color: "bg-violet-100 text-violet-600" },
+            { label: "AI Copilot", value: "Online", icon: Bot, color: "bg-emerald-100 text-emerald-600" },
           ].map(({ label, value, icon: Icon, color }) => (
             <div key={label} className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm text-center">
               <div className={`w-10 h-10 rounded-xl ${color} flex items-center justify-center mx-auto mb-3`}>
                 <Icon size={18} />
               </div>
-              <p className="text-2xl font-bold text-slate-800">{value}</p>
+              <p className="text-lg font-bold text-slate-800">{value}</p>
               <p className="text-xs text-slate-500 mt-1">{label}</p>
             </div>
           ))}
           <div className="col-span-3 bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
-            <h3 className="text-sm font-semibold text-slate-800 mb-4">Recent Activity</h3>
+            <h3 className="text-sm font-semibold text-slate-800 mb-4">Recent Workspace Activity</h3>
             <div className="space-y-4">
-              {[
-                { text: "Generated July Revenue Report", time: "Today, 10:15 AM", icon: BarChart3, color: "text-indigo-500" },
-                { text: "Added new customer: Selvaraj Annamalai (Chennai Traders)", time: "Yesterday, 3:22 PM", icon: Users, color: "text-violet-500" },
-                { text: "AI Copilot: Sales forecast for Q3", time: "Jul 27, 11:30 AM", icon: Bot, color: "text-cyan-500" },
-                { text: "Invoice INV-2026-005 marked as paid — ₹38,500", time: "Jul 26, 4:02 PM", icon: CheckCircle, color: "text-emerald-500" },
-              ].map(({ text, time, icon: Icon, color }, i) => (
-                <div key={i} className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center shrink-0">
-                    <Icon size={14} className={color} />
+              {activity.length > 0 ? (
+                activity.map(({ text, time, color }, i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center shrink-0">
+                      <Activity size={14} className={color} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-slate-700">{text}</p>
+                      <p className="text-xs text-slate-400">{time}</p>
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-slate-700">{text}</p>
-                    <p className="text-xs text-slate-400">{time}</p>
-                  </div>
+                ))
+              ) : (
+                <div className="py-8 text-center text-slate-400">
+                  <Activity size={24} className="mx-auto mb-2 text-slate-300" />
+                  <p className="text-xs font-medium text-slate-600">No recent activity logged</p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">Operational events and audit logs will appear here.</p>
                 </div>
-              ))}
+              )}
             </div>
           </div>
         </div>
@@ -5460,7 +5604,7 @@ export default function App() {
         {page === "profile" && <ProfilePage setPage={handlePageChange} user={currentUser} />}
         {page === "pricing" && <PricingPage />}
         {page === "design-system" && <DesignSystemPage />}
-        {page === "profit" && <ProfitAnalyzerPage />}
+        {page === "profit" && <ProfitAnalyzerPage user={currentUser} />}
       </AppLayout>
     </>
   );
