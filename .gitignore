@@ -108,6 +108,7 @@ logs/
 .cache/
 .temp/
 tmp/
+scratch/
 
 # ─── 9. VS Code & Other IDE-Specific Files ──────────────────
 .vscode/*
