@@ -396,6 +396,34 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   return await res.json();
 }
 
+async function requestBlob(endpoint: string, options: RequestInit = {}): Promise<Blob> {
+  const baseUrl = getBaseApiUrl();
+  const primaryUrl = `${baseUrl}${endpoint}`;
+  const storedToken = typeof localStorage !== "undefined" ? localStorage.getItem("bizops_session_token") : null;
+
+  const headers: Record<string, string> = {
+    ...(storedToken && !((options.headers as Record<string, string>)?.["Authorization"]) ? { "Authorization": `Bearer ${storedToken}` } : {}),
+    ...((options.headers as Record<string, string>) || {}),
+  };
+
+  const res = await fetch(primaryUrl, {
+    ...options,
+    headers,
+    credentials: "include",
+  });
+
+  if (!res.ok) {
+    let errDetail = `Server responded with HTTP ${res.status}`;
+    try {
+      const errJson = await res.json();
+      if (errJson?.detail) errDetail = errJson.detail;
+    } catch {}
+    throw new Error(errDetail);
+  }
+
+  return await res.blob();
+}
+
 // ─── API Client Methods ───────────────────────────────────────────────────────
 
 export const api = {
@@ -557,6 +585,29 @@ export const api = {
     return request(`/api/invoices/${id}`, {
       method: "DELETE",
     });
+  },
+
+  async downloadInvoicePDF(id: string): Promise<Blob> {
+    return requestBlob(`/api/invoices/${encodeURIComponent(id)}/pdf`);
+  },
+
+  // Global Multi-Entity Search
+  async globalSearch(q: string): Promise<{
+    query: string;
+    total: number;
+    results: {
+      customers: any[];
+      products: any[];
+      invoices: any[];
+      employees: any[];
+    };
+  }> {
+    return request(`/api/search?q=${encodeURIComponent(q)}`);
+  },
+
+  // AI & ML Model Holdout Metrics
+  async getModelMetrics(): Promise<any> {
+    return request("/api/ai/models/metrics");
   },
 
   // Sales Analytics

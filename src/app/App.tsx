@@ -436,6 +436,20 @@ function Sidebar({ page, setPage, collapsed, setCollapsed, user, onLogout }: {
 
 function TopBar({ page, setPage, user, onToggleSidebar }: { page: Page; setPage: (p: Page) => void; user: UserSession | null; onToggleSidebar?: () => void }) {
   const [globalSearch, setGlobalSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<{
+    query: string;
+    total: number;
+    results: {
+      customers: any[];
+      products: any[];
+      invoices: any[];
+      employees: any[];
+    };
+  } | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isOpen, setIsOpen] = useState(false);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+
   const labels: Record<string, string> = {
     dashboard: "Dashboard", "business-health": "AI Business Health", "action-center": "AI Action Center", copilot: "AI Copilot", customers: "Customers",
     sales: "Sales Analytics", inventory: "Inventory", invoices: "Invoices",
@@ -444,23 +458,76 @@ function TopBar({ page, setPage, user, onToggleSidebar }: { page: Page; setPage:
     "design-system": "Design System", profit: "Profit Analyzer",
   };
 
-  const handleGlobalSearch = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && globalSearch.trim()) {
-      const q = globalSearch.trim().toLowerCase();
-      if (q.includes("cust")) setPage("customers");
-      else if (q.includes("sale") || q.includes("rev")) setPage("sales");
-      else if (q.includes("inv") || q.includes("bill")) setPage("invoices");
-      else if (q.includes("item") || q.includes("stock") || q.includes("prod")) setPage("inventory");
-      else if (q.includes("emp") || q.includes("staff") || q.includes("hr")) setPage("employees");
-      else if (q.includes("rep")) setPage("reports");
-      else if (q.includes("prof") || q.includes("cost") || q.includes("margin")) setPage("profit");
-      else if (q.includes("act") || q.includes("task")) setPage("action-center");
-      else if (q.includes("health")) setPage("business-health");
-      else if (q.includes("notif")) setPage("notifications");
-      else if (q.includes("set") || q.includes("pref")) setPage("settings");
-      else if (q.includes("price") || q.includes("plan")) setPage("pricing");
-      else setPage("copilot");
+  // Close search dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
     }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Debounced search querying database records
+  useEffect(() => {
+    const q = globalSearch.trim();
+    if (!q) {
+      setSearchResults(null);
+      setIsOpen(false);
+      setIsSearching(false);
+      return;
+    }
+
+    setIsSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await api.globalSearch(q);
+        setSearchResults(res);
+        setIsOpen(true);
+      } catch (err) {
+        console.error("Global search error:", err);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [globalSearch]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") {
+      setIsOpen(false);
+    } else if (e.key === "Enter") {
+      if (searchResults && searchResults.total > 0) {
+        if (searchResults.results.customers.length > 0) setPage("customers");
+        else if (searchResults.results.products.length > 0) setPage("inventory");
+        else if (searchResults.results.invoices.length > 0) setPage("invoices");
+        else if (searchResults.results.employees.length > 0) setPage("employees");
+        setIsOpen(false);
+      } else if (globalSearch.trim()) {
+        const q = globalSearch.trim().toLowerCase();
+        if (q.includes("cust")) setPage("customers");
+        else if (q.includes("sale") || q.includes("rev")) setPage("sales");
+        else if (q.includes("inv") || q.includes("bill")) setPage("invoices");
+        else if (q.includes("item") || q.includes("stock") || q.includes("prod")) setPage("inventory");
+        else if (q.includes("emp") || q.includes("staff") || q.includes("hr")) setPage("employees");
+        else if (q.includes("rep")) setPage("reports");
+        else if (q.includes("prof") || q.includes("cost") || q.includes("margin")) setPage("profit");
+        else if (q.includes("act") || q.includes("task")) setPage("action-center");
+        else if (q.includes("health")) setPage("business-health");
+        else if (q.includes("notif")) setPage("notifications");
+        else if (q.includes("set") || q.includes("pref")) setPage("settings");
+        else if (q.includes("price") || q.includes("plan")) setPage("pricing");
+        else setPage("copilot");
+        setIsOpen(false);
+      }
+    }
+  };
+
+  const handleSelectResult = (targetPage: Page) => {
+    setPage(targetPage);
+    setIsOpen(false);
   };
 
   return (
@@ -477,12 +544,147 @@ function TopBar({ page, setPage, user, onToggleSidebar }: { page: Page; setPage:
       <h1 className="font-semibold text-slate-800 text-sm truncate">{labels[page] || page}</h1>
 
       <div className="flex-1" />
-      <SearchBar
-        value={globalSearch}
-        onChange={setGlobalSearch}
-        onKeyDown={handleGlobalSearch}
-        placeholder="Search operations... (Enter to go)"
-      />
+
+      {/* Global Search with Live Database Query Results */}
+      <div className="relative" ref={searchContainerRef}>
+        <div className="relative">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={globalSearch}
+            onChange={(e) => setGlobalSearch(e.target.value)}
+            onFocus={() => { if (globalSearch.trim()) setIsOpen(true); }}
+            onKeyDown={handleKeyDown}
+            className="pl-9 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 w-48 sm:w-72 transition-all"
+            placeholder="Search customers, products, invoices..."
+          />
+          {isSearching ? (
+            <Loader2 size={13} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-indigo-500" />
+          ) : globalSearch ? (
+            <button
+              onClick={() => { setGlobalSearch(""); setIsOpen(false); }}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+            >
+              <X size={13} />
+            </button>
+          ) : null}
+        </div>
+
+        {/* Floating Search Results Dropdown */}
+        {isOpen && globalSearch.trim().length > 0 && (
+          <div className="absolute top-full right-0 mt-2 w-80 sm:w-96 bg-white border border-slate-200 rounded-2xl shadow-2xl z-50 overflow-hidden max-h-[460px] overflow-y-auto divide-y divide-slate-100">
+            {isSearching && !searchResults ? (
+              <div className="p-6 flex items-center justify-center gap-2 text-xs text-slate-500">
+                <Loader2 size={14} className="animate-spin text-indigo-500" /> Searching your records...
+              </div>
+            ) : searchResults?.total === 0 ? (
+              <div className="p-6 text-center text-slate-500 text-xs">
+                <Search size={22} className="mx-auto text-slate-300 mb-2" />
+                <p className="font-semibold text-slate-700">No results found for "{globalSearch}"</p>
+                <p className="text-[11px] text-slate-400 mt-1">Try searching by customer name, SKU, invoice #, or employee role.</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {/* Search Meta Header */}
+                <div className="px-3.5 py-2 bg-slate-50/70 flex items-center justify-between text-[11px] font-medium text-slate-500">
+                  <span>Found {searchResults?.total} match{searchResults?.total === 1 ? "" : "es"}</span>
+                  <span className="text-[10px] text-slate-400">Esc to close • Enter to select</span>
+                </div>
+
+                {/* Customers */}
+                {searchResults?.results.customers && searchResults.results.customers.length > 0 && (
+                  <div className="p-2">
+                    <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-indigo-600 flex items-center gap-1.5">
+                      <Users size={11} /> Customers ({searchResults.results.customers.length})
+                    </div>
+                    {searchResults.results.customers.map((c) => (
+                      <div
+                        key={`c-${c.id}`}
+                        onClick={() => handleSelectResult("customers")}
+                        className="px-2.5 py-2 hover:bg-indigo-50/50 rounded-xl cursor-pointer flex items-center justify-between transition-colors group"
+                      >
+                        <div className="min-w-0 pr-2">
+                          <p className="text-xs font-semibold text-slate-800 truncate group-hover:text-indigo-600">{c.name}</p>
+                          <p className="text-[11px] text-slate-500 truncate">{c.company || "Individual"} • {c.email || c.phone || "No contact"}</p>
+                        </div>
+                        <StatusBadge status={c.status || "Active"} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Products */}
+                {searchResults?.results.products && searchResults.results.products.length > 0 && (
+                  <div className="p-2">
+                    <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-purple-600 flex items-center gap-1.5">
+                      <Package size={11} /> Products & Stock ({searchResults.results.products.length})
+                    </div>
+                    {searchResults.results.products.map((p) => (
+                      <div
+                        key={`p-${p.id}`}
+                        onClick={() => handleSelectResult("inventory")}
+                        className="px-2.5 py-2 hover:bg-purple-50/50 rounded-xl cursor-pointer flex items-center justify-between transition-colors group"
+                      >
+                        <div className="min-w-0 pr-2">
+                          <p className="text-xs font-semibold text-slate-800 truncate group-hover:text-purple-600">{p.name}</p>
+                          <p className="text-[11px] text-slate-500 truncate">SKU: {p.sku} • Stock: {p.stock} units</p>
+                        </div>
+                        <span className="text-xs font-semibold text-slate-700 shrink-0">₹{Number(p.price || 0).toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Invoices */}
+                {searchResults?.results.invoices && searchResults.results.invoices.length > 0 && (
+                  <div className="p-2">
+                    <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-600 flex items-center gap-1.5">
+                      <FileText size={11} /> Invoices ({searchResults.results.invoices.length})
+                    </div>
+                    {searchResults.results.invoices.map((inv) => (
+                      <div
+                        key={`inv-${inv.id}`}
+                        onClick={() => handleSelectResult("invoices")}
+                        className="px-2.5 py-2 hover:bg-emerald-50/50 rounded-xl cursor-pointer flex items-center justify-between transition-colors group"
+                      >
+                        <div className="min-w-0 pr-2">
+                          <p className="text-xs font-semibold text-slate-800 truncate group-hover:text-emerald-600">{inv.id}</p>
+                          <p className="text-[11px] text-slate-500 truncate">Client: {inv.client} • Due: {inv.due || "N/A"}</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-xs font-bold text-slate-800">{inv.amount}</p>
+                          <StatusBadge status={inv.status || "Pending"} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Employees */}
+                {searchResults?.results.employees && searchResults.results.employees.length > 0 && (
+                  <div className="p-2">
+                    <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-amber-600 flex items-center gap-1.5">
+                      <Briefcase size={11} /> Employees ({searchResults.results.employees.length})
+                    </div>
+                    {searchResults.results.employees.map((emp) => (
+                      <div
+                        key={`emp-${emp.id}`}
+                        onClick={() => handleSelectResult("employees")}
+                        className="px-2.5 py-2 hover:bg-amber-50/50 rounded-xl cursor-pointer flex items-center justify-between transition-colors group"
+                      >
+                        <div className="min-w-0 pr-2">
+                          <p className="text-xs font-semibold text-slate-800 truncate group-hover:text-amber-600">{emp.name}</p>
+                          <p className="text-[11px] text-slate-500 truncate">{emp.role} • {emp.department}</p>
+                        </div>
+                        <StatusBadge status={emp.status || "Active"} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
       <button
         className="relative w-8 h-8 rounded-xl border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-50 shrink-0"
         onClick={() => setPage("notifications")}
@@ -3054,6 +3256,13 @@ function CustomersPage() {
                 <div className="py-2 flex items-center gap-2 text-xs text-amber-600">
                   <Loader2 size={12} className="animate-spin" /> Calculating ML churn score...
                 </div>
+              ) : churnPrediction?.has_prediction === false ? (
+                <div className="py-2 text-xs text-amber-900">
+                  <p className="font-semibold text-amber-800">Not enough data for prediction</p>
+                  <p className="text-amber-700 mt-1 leading-relaxed">
+                    {churnPrediction?.message || "Customer has no historical transactions. Engage customer to initiate first order."}
+                  </p>
+                </div>
               ) : (
                 <>
                   <div className="h-2 bg-amber-100 rounded-full overflow-hidden mb-1.5 mt-2">
@@ -3599,6 +3808,13 @@ function InventoryPage() {
                 <div className="py-2 flex items-center gap-2 text-xs text-indigo-600">
                   <Loader2 size={12} className="animate-spin" /> Calculating demand forecast...
                 </div>
+              ) : demandForecast?.has_prediction === false ? (
+                <div className="py-2 text-xs text-indigo-900">
+                  <p className="font-semibold text-indigo-800">Not enough data for prediction</p>
+                  <p className="text-slate-600 mt-1 leading-relaxed">
+                    {demandForecast.message || "Record catalog sales to calibrate product turnover and demand forecasting."}
+                  </p>
+                </div>
               ) : demandForecast ? (
                 <div className="space-y-1.5 text-xs text-slate-700">
                   <div className="flex justify-between">
@@ -3719,101 +3935,26 @@ function parsePriceNum(priceStr: string | number | undefined): number {
   return isNaN(val) ? 0 : val;
 }
 
-function downloadInvoicePDF(inv: Invoice, companyName = "AI Business Operations Copilot") {
-  const lineItemsHtml = (inv.line_items && inv.line_items.length > 0)
-    ? inv.line_items.map(li => `
-      <tr>
-        <td style="padding:10px;border-bottom:1px solid #e2e8f0;">${li.product_name}</td>
-        <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:center;">${li.quantity}</td>
-        <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:right;">₹${(li.unit_price || 0).toLocaleString()}</td>
-        <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:600;">₹${(li.line_total || 0).toLocaleString()}</td>
-      </tr>
-    `).join("")
-    : `
-      <tr>
-        <td style="padding:10px;border-bottom:1px solid #e2e8f0;">${inv.items || "Business Operations Services"}</td>
-        <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:center;">1</td>
-        <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:right;">${inv.amount}</td>
-        <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:600;">${inv.amount}</td>
-      </tr>
-    `;
-
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <title>Invoice ${inv.id} - ${inv.client}</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 40px; color: #1e293b; }
-    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #4f46e5; padding-bottom: 20px; margin-bottom: 30px; }
-    .title { font-size: 28px; font-weight: bold; color: #4f46e5; margin: 0; }
-    .company { font-size: 14px; color: #64748b; margin-top: 5px; }
-    .meta { text-align: right; }
-    .inv-num { font-size: 18px; font-weight: 600; color: #0f172a; }
-    .status { display: inline-block; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; margin-top: 6px; background: #e0e7ff; color: #4338ca; }
-    .details { display: flex; justify-content: space-between; margin-bottom: 30px; }
-    .col { flex: 1; }
-    .label { font-size: 12px; text-transform: uppercase; color: #94a3b8; font-weight: 600; margin-bottom: 4px; }
-    .value { font-size: 14px; color: #334155; font-weight: 500; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
-    th { background: #f8fafc; padding: 12px 10px; text-align: left; font-size: 12px; text-transform: uppercase; color: #64748b; border-bottom: 2px solid #cbd5e1; }
-    .totals { width: 320px; margin-left: auto; margin-bottom: 40px; }
-    .row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; color: #64748b; }
-    .total-row { display: flex; justify-content: space-between; padding: 10px 0; font-size: 18px; font-weight: bold; color: #0f172a; border-top: 2px solid #cbd5e1; }
-    .footer { text-align: center; color: #94a3b8; font-size: 12px; border-top: 1px solid #e2e8f0; padding-top: 20px; }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <div>
-      <div class="title">INVOICE</div>
-      <div class="company">${companyName}</div>
-    </div>
-    <div class="meta">
-      <div class="inv-num">${inv.id}</div>
-      <div class="status">${inv.status}</div>
-    </div>
-  </div>
-  <div class="details">
-    <div class="col">
-      <div class="label">Billed To</div>
-      <div class="value" style="font-size: 16px; font-weight: 600;">${inv.client}</div>
-    </div>
-    <div class="col" style="text-align: right;">
-      <div class="label">Invoice Date: <span class="value">${inv.issued || "N/A"}</span></div>
-      <div class="label">Due Date: <span class="value" style="color: #e11d48;">${inv.due || "N/A"}</span></div>
-    </div>
-  </div>
-  <table>
-    <thead>
-      <tr>
-        <th>Description</th>
-        <th style="text-align:center;">Qty</th>
-        <th style="text-align:right;">Unit Price</th>
-        <th style="text-align:right;">Amount</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${lineItemsHtml}
-    </tbody>
-  </table>
-  <div class="totals">
-    <div class="row"><span>Subtotal</span><span>₹${(inv.subtotal || 0).toLocaleString()}</span></div>
-    <div class="row"><span>Tax (${inv.tax || 18}%)</span><span>+ ₹${((inv.subtotal || 0) * (Number(inv.tax || 18) / 100)).toLocaleString()}</span></div>
-    ${inv.discount ? `<div class="row"><span>Discount</span><span>- ₹${Number(inv.discount).toLocaleString()}</span></div>` : ""}
-    <div class="total-row"><span>Grand Total</span><span>${inv.amount}</span></div>
-  </div>
-  <div class="footer">Thank you for your business. Generated by AI Business Operations Copilot.</div>
-</body>
-</html>`;
-
-  const blob = new Blob([html], { type: "text/html;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `Invoice_${inv.id}.html`;
-  a.click();
-  URL.revokeObjectURL(url);
+async function downloadInvoicePDF(inv: Invoice, companyName = "AI Business Operations Copilot") {
+  try {
+    const blob = await api.downloadInvoicePDF(inv.id);
+    if (!blob || blob.size === 0) {
+      throw new Error("Empty document received from server.");
+    }
+    const cleanId = (inv.id || "INVOICE").replace(/[^a-zA-Z0-9_\-]/g, "_");
+    const filename = `Invoice_${cleanId}.pdf`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err: any) {
+    console.error("Failed to download PDF invoice:", err);
+    alert(`Could not download PDF invoice: ${err.message || "Failed to generate PDF document."}`);
+  }
 }
 
 function InvoicesPage() {

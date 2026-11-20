@@ -28,8 +28,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.metrics import accuracy_score, mean_absolute_error
+from sklearn.metrics import (
+    accuracy_score, mean_absolute_error, mean_squared_error, r2_score,
+    precision_score, recall_score, f1_score, roc_auc_score
+)
 from sklearn.model_selection import train_test_split
+import pymupdf
 import logging
 
 logging.basicConfig(
@@ -604,21 +608,20 @@ def create_customer_data(rows=3000):
     return pd.DataFrame(data)
 
 
-def create_sales_data(rows=36):
+def create_sales_data(rows=120):
     random.seed(42)
     data = []
     for month in range(1, rows + 1):
-        base_revenue = 4200000 + month * 95000
-        seasonal_factor = 1 + 0.08 * math.sin(month / 12 * 2 * math.pi)
-        revenue = base_revenue * seasonal_factor + random.gauss(0, 180000)
-        revenue = max(100000, revenue)
-        orders = max(100, round(revenue / random.uniform(5000, 7000)))
-        marketing_spend = revenue * random.uniform(0.06, 0.12)
+        base_revenue = 4000000 + month * 50000
+        seasonal_factor = 1 + 0.10 * math.sin(month / 12 * 2 * math.pi)
+        revenue = max(500000, base_revenue * seasonal_factor + random.gauss(0, 100000))
+        orders = max(50, round(revenue / random.uniform(5200, 6200)))
+        marketing_spend = round(revenue * random.uniform(0.07, 0.11), 2)
         data.append({
             "month_index": month,
             "revenue": round(revenue, 2),
             "orders": orders,
-            "marketing_spend": round(marketing_spend, 2)
+            "marketing_spend": marketing_spend
         })
     return pd.DataFrame(data)
 
@@ -661,26 +664,56 @@ def train_churn_model():
         class_weight="balanced", random_state=42
     )
     model.fit(X_train, y_train)
-    accuracy = accuracy_score(y_test, model.predict(X_test))
-    joblib.dump({"model": model, "features": features}, CHURN_MODEL)
-    print(f"Customer churn accuracy: {accuracy * 100:.2f}%")
+    y_pred = model.predict(X_test)
+    y_proba = model.predict_proba(X_test)[:, 1]
+
+    acc = round(float(accuracy_score(y_test, y_pred)), 4)
+    prec = round(float(precision_score(y_test, y_pred, zero_division=0)), 4)
+    rec = round(float(recall_score(y_test, y_pred, zero_division=0)), 4)
+    f1 = round(float(f1_score(y_test, y_pred, zero_division=0)), 4)
+    auc = round(float(roc_auc_score(y_test, y_proba)), 4)
+
+    metrics = {
+        "accuracy": acc,
+        "precision": prec,
+        "recall": rec,
+        "f1_score": f1,
+        "roc_auc": auc,
+        "test_samples": len(y_test),
+        "train_samples": len(X_train),
+        "model_type": "RandomForestClassifier(n_estimators=300, max_depth=10)"
+    }
+    joblib.dump({"model": model, "features": features, "metrics": metrics}, CHURN_MODEL)
+    logger.info("Trained Churn Model: Accuracy=%.2f%% F1=%.4f ROC-AUC=%.4f", acc * 100, f1, auc)
 
 
 def train_sales_model():
-    data = create_sales_data()
+    data = create_sales_data(rows=120)
     features = ["month_index", "orders", "marketing_spend"]
     X = data[features]
     y = data["revenue"]
-    split = int(len(data) * 0.80)
-    X_train, X_test = X.iloc[:split], X.iloc[split:]
-    y_train, y_test = y.iloc[:split], y.iloc[split:]
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=42
+    )
     model = RandomForestRegressor(
-        n_estimators=400, max_depth=12, min_samples_leaf=2, random_state=42
+        n_estimators=250, max_depth=12, min_samples_leaf=2, random_state=42
     )
     model.fit(X_train, y_train)
-    error = mean_absolute_error(y_test, model.predict(X_test))
-    joblib.dump({"model": model, "features": features}, SALES_MODEL)
-    print(f"Sales model MAE: {error:.2f}")
+    y_pred = model.predict(X_test)
+    mae = round(float(mean_absolute_error(y_test, y_pred)), 2)
+    rmse = round(float(math.sqrt(mean_squared_error(y_test, y_pred))), 2)
+    r2 = round(float(r2_score(y_test, y_pred)), 4)
+
+    metrics = {
+        "mae": mae,
+        "rmse": rmse,
+        "r2_score": r2,
+        "test_samples": len(y_test),
+        "train_samples": len(X_train),
+        "model_type": "RandomForestRegressor(n_estimators=250, max_depth=12)"
+    }
+    joblib.dump({"model": model, "features": features, "metrics": metrics}, SALES_MODEL)
+    logger.info("Trained Sales Model: MAE=%.2f RMSE=%.2f R2=%.4f", mae, rmse, r2)
 
 
 def train_inventory_model():
@@ -695,9 +728,21 @@ def train_inventory_model():
         n_estimators=300, max_depth=12, min_samples_leaf=2, random_state=42
     )
     model.fit(X_train, y_train)
-    error = mean_absolute_error(y_test, model.predict(X_test))
-    joblib.dump({"model": model, "features": features}, INVENTORY_MODEL)
-    print(f"Inventory model MAE: {error:.2f}")
+    y_pred = model.predict(X_test)
+    mae = round(float(mean_absolute_error(y_test, y_pred)), 2)
+    rmse = round(float(math.sqrt(mean_squared_error(y_test, y_pred))), 2)
+    r2 = round(float(r2_score(y_test, y_pred)), 4)
+
+    metrics = {
+        "mae": mae,
+        "rmse": rmse,
+        "r2_score": r2,
+        "test_samples": len(y_test),
+        "train_samples": len(X_train),
+        "model_type": "RandomForestRegressor(n_estimators=300, max_depth=12)"
+    }
+    joblib.dump({"model": model, "features": features, "metrics": metrics}, INVENTORY_MODEL)
+    logger.info("Trained Inventory Model: MAE=%.2f RMSE=%.2f R2=%.4f", mae, rmse, r2)
 
 
 # Ensure models are trained
@@ -711,6 +756,16 @@ if not INVENTORY_MODEL.exists():
 churn_bundle = joblib.load(CHURN_MODEL)
 sales_bundle = joblib.load(SALES_MODEL)
 inventory_bundle = joblib.load(INVENTORY_MODEL)
+
+if "metrics" not in churn_bundle:
+    train_churn_model()
+    churn_bundle = joblib.load(CHURN_MODEL)
+if "metrics" not in sales_bundle:
+    train_sales_model()
+    sales_bundle = joblib.load(SALES_MODEL)
+if "metrics" not in inventory_bundle:
+    train_inventory_model()
+    inventory_bundle = joblib.load(INVENTORY_MODEL)
 
 
 # ============================================================
@@ -1665,16 +1720,74 @@ def predict_customer_churn_by_id(customer_id: int, user: dict = Depends(get_auth
         raise HTTPException(status_code=404, detail="Customer not found")
 
     cust = dict(row)
+    try:
+        orders = int(cust.get("orders") or 0)
+    except (ValueError, TypeError):
+        orders = 0
+
+    raw_spend = cust.get("total_spend")
+    if raw_spend is None or raw_spend == 0 or raw_spend == 0.0 or raw_spend == "0":
+        raw_ltv = cust.get("ltv")
+        if raw_ltv:
+            clean_ltv = re.sub(r"[^\d.]", "", str(raw_ltv))
+            total_spend = float(clean_ltv) if clean_ltv else 0.0
+        else:
+            total_spend = 0.0
+    else:
+        try:
+            if isinstance(raw_spend, str):
+                clean_spend = re.sub(r"[^\d.]", "", raw_spend)
+                total_spend = float(clean_spend) if clean_spend else 0.0
+            else:
+                total_spend = float(raw_spend)
+        except (ValueError, TypeError):
+            total_spend = 0.0
+
+    # Handle insufficient historical data
+    if orders <= 0 and total_spend <= 0:
+        conn.close()
+        return {
+            "customer_id": customer_id,
+            "name": cust["name"],
+            "has_prediction": False,
+            "risk": "UNKNOWN",
+            "churn_probability": None,
+            "message": "Not enough data for prediction (new customer with no transaction history)",
+            "recommendation": "Customer has no historical transactions. Engage customer to initiate first order.",
+            "model_metrics": churn_bundle.get("metrics")
+        }
+
     model = churn_bundle["model"]
     features = churn_bundle["features"]
-    avg_val = cust["average_order_value"] or (cust["total_spend"] / max(1, cust["orders"]))
+    try:
+        avg_val = float(cust.get("average_order_value") or 0.0)
+    except (ValueError, TypeError):
+        avg_val = 0.0
+    if avg_val <= 0 and orders > 0:
+        avg_val = total_spend / orders
+
+    try:
+        days_since = int(cust.get("days_since_last_purchase") or 15)
+    except (ValueError, TypeError):
+        days_since = 15
+
+    try:
+        support_tickets = int(cust.get("support_tickets") or 0)
+    except (ValueError, TypeError):
+        support_tickets = 0
+
+    try:
+        complaints = int(cust.get("complaints") or 0)
+    except (ValueError, TypeError):
+        complaints = 0
+
     input_data = pd.DataFrame(
         [[
-            cust["orders"],
-            cust["total_spend"],
-            cust["days_since_last_purchase"],
-            cust["support_tickets"],
-            cust["complaints"],
+            orders,
+            total_spend,
+            days_since,
+            support_tickets,
+            complaints,
             avg_val
         ]],
         columns=features
@@ -1698,9 +1811,11 @@ def predict_customer_churn_by_id(customer_id: int, user: dict = Depends(get_auth
     return {
         "customer_id": customer_id,
         "name": cust["name"],
+        "has_prediction": True,
         "churn_probability": prob,
         "risk": risk,
-        "recommendation": recommendation
+        "recommendation": recommendation,
+        "model_metrics": churn_bundle.get("metrics")
     }
 
 
@@ -2003,13 +2118,32 @@ def forecast_product_demand_by_id(product_id: int, user: dict = Depends(get_auth
         raise HTTPException(status_code=404, detail="Product not found")
 
     p = dict(row)
+    daily_demand = float(p.get("avg_daily_demand") or 0.0)
+    stock = int(p.get("stock") or 0)
+
+    # Handle insufficient historical sales velocity
+    if daily_demand <= 0 and stock <= 0:
+        conn.close()
+        return {
+            "product_id": product_id,
+            "name": p["name"],
+            "has_prediction": False,
+            "message": "Not enough data for prediction (no sales velocity recorded for this product)",
+            "stockout_risk": "UNKNOWN",
+            "predicted_demand_7_days": None,
+            "predicted_demand_30_days": None,
+            "recommended_reorder": 0,
+            "recommendation": "Record catalog sales to calibrate product turnover and demand forecasting.",
+            "model_metrics": inventory_bundle.get("metrics")
+        }
+
     model = inventory_bundle["model"]
     features = inventory_bundle["features"]
     input_data = pd.DataFrame(
         [[
-            p["avg_daily_demand"],
-            p["trend_factor"],
-            p["promotion_factor"]
+            max(0.1, daily_demand),
+            float(p.get("trend_factor") or 0.05),
+            float(p.get("promotion_factor") or 0.0)
         ]],
         columns=features
     )
@@ -2035,13 +2169,15 @@ def forecast_product_demand_by_id(product_id: int, user: dict = Depends(get_auth
     return {
         "product_id": product_id,
         "name": p["name"],
+        "has_prediction": True,
         "current_stock": current_stock,
         "reorder_level": reorder_level,
         "predicted_demand_7_days": pred_7,
         "predicted_demand_30_days": round(pred_30, 1),
         "stockout_risk": risk,
         "recommended_reorder": reorder_qty,
-        "recommendation": rec
+        "recommendation": rec,
+        "model_metrics": inventory_bundle.get("metrics")
     }
 
 
@@ -2117,6 +2253,231 @@ def get_invoice(invoice_id: str, user: dict = Depends(get_authenticated_user)):
     inv_data["line_items"] = [dict(item) for item in cursor.fetchall()]
     conn.close()
     return inv_data
+
+
+def generate_invoice_pdf_bytes(inv: dict, line_items: list, customer: dict = None) -> bytes:
+    doc = pymupdf.open()
+    page = doc.new_page(width=595.3, height=841.9)  # Standard A4 (points)
+
+    PRIMARY = (0.20, 0.28, 0.60)       # Indigo
+    DARK_TEXT = (0.09, 0.12, 0.18)     # Slate 900
+    MUTED_TEXT = (0.45, 0.50, 0.58)    # Slate 500
+    BORDER_COLOR = (0.88, 0.90, 0.94)  # Slate 200
+    BG_LIGHT = (0.97, 0.98, 1.00)      # Soft Indigo tint
+
+    # 1. Top Decorative Brand Banner
+    page.draw_rect(pymupdf.Rect(40, 40, 555.3, 115), color=None, fill=BG_LIGHT)
+    page.draw_line(pymupdf.Point(40, 115), pymupdf.Point(555.3, 115), color=PRIMARY, width=2.0)
+
+    # Brand / Company
+    page.insert_text((55, 68), "AI BUSINESS OPERATIONS COPILOT", fontsize=15, fontname="hebo", color=PRIMARY)
+    page.insert_text((55, 84), "Enterprise Cloud, AI & Business Automation Suite", fontsize=9, fontname="helv", color=MUTED_TEXT)
+    page.insert_text((55, 98), "GSTIN: 06AAACB1234D1Z9  |  billing@bizops.in  |  Tel: +91 124 456 7890", fontsize=8, fontname="helv", color=MUTED_TEXT)
+
+    # Invoice Title & ID
+    page.insert_text((410, 68), "TAX INVOICE", fontsize=16, fontname="hebo", color=PRIMARY)
+    page.insert_text((410, 84), f"Invoice #: {inv.get('id', 'N/A')}", fontsize=10, fontname="hebo", color=DARK_TEXT)
+
+    # Status Badge
+    raw_status = (inv.get("status") or "PENDING").upper()
+    status_color = (0.05, 0.55, 0.35) if raw_status == "PAID" else (0.85, 0.45, 0.05) if raw_status == "PENDING" else (0.85, 0.15, 0.20)
+    page.draw_rect(pymupdf.Rect(410, 90, 480, 106), color=status_color, fill=None, width=1.0)
+    page.insert_text((420, 102), raw_status, fontsize=8, fontname="hebo", color=status_color)
+
+    # 2. Details Section (Billed To & Meta)
+    page.insert_text((55, 140), "BILLED TO (CUSTOMER)", fontsize=9, fontname="hebo", color=MUTED_TEXT)
+    client_name = inv.get("client") or "Valued Customer"
+    page.insert_text((55, 156), client_name, fontsize=12, fontname="hebo", color=DARK_TEXT)
+
+    curr_y = 172
+    if customer:
+        if customer.get("company") and customer.get("company") != client_name:
+            page.insert_text((55, curr_y), str(customer.get("company")), fontsize=9, fontname="helv", color=MUTED_TEXT)
+            curr_y += 14
+        if customer.get("email"):
+            page.insert_text((55, curr_y), f"Email: {customer.get('email')}", fontsize=9, fontname="helv", color=MUTED_TEXT)
+            curr_y += 14
+        if customer.get("phone"):
+            page.insert_text((55, curr_y), f"Phone: {customer.get('phone')}", fontsize=9, fontname="helv", color=MUTED_TEXT)
+            curr_y += 14
+
+    # Meta Details (Right)
+    page.insert_text((370, 140), "INVOICE DETAILS", fontsize=9, fontname="hebo", color=MUTED_TEXT)
+    page.insert_text((370, 156), f"Issue Date:  {inv.get('issued') or 'N/A'}", fontsize=9, fontname="helv", color=DARK_TEXT)
+    page.insert_text((370, 170), f"Due Date:    {inv.get('due') or 'N/A'}", fontsize=9, fontname="helv", color=DARK_TEXT)
+    page.insert_text((370, 184), "Currency:    INR (Indian Rupees)", fontsize=9, fontname="helv", color=DARK_TEXT)
+
+    # 3. Line Items Table
+    table_top = max(215, curr_y + 20)
+    page.draw_rect(pymupdf.Rect(40, table_top, 555.3, table_top + 24), color=None, fill=(0.94, 0.95, 0.98))
+    page.draw_line(pymupdf.Point(40, table_top + 24), pymupdf.Point(555.3, table_top + 24), color=PRIMARY, width=1.0)
+
+    page.insert_text((55, table_top + 16), "#", fontsize=9, fontname="hebo", color=PRIMARY)
+    page.insert_text((85, table_top + 16), "ITEM DESCRIPTION", fontsize=9, fontname="hebo", color=PRIMARY)
+    page.insert_text((330, table_top + 16), "QTY", fontsize=9, fontname="hebo", color=PRIMARY)
+    page.insert_text((385, table_top + 16), "UNIT PRICE (INR)", fontsize=9, fontname="hebo", color=PRIMARY)
+    page.insert_text((475, table_top + 16), "TOTAL (INR)", fontsize=9, fontname="hebo", color=PRIMARY)
+
+    row_y = table_top + 24
+    items_to_render = line_items if line_items else [
+        {"product_name": inv.get("items") or "Business Operations Services", "quantity": 1, "unit_price": inv.get("amount_num") or 0.0, "line_total": inv.get("amount_num") or 0.0}
+    ]
+
+    for idx, item in enumerate(items_to_render, start=1):
+        bg = (0.99, 0.99, 1.0) if idx % 2 == 0 else (1.0, 1.0, 1.0)
+        page.draw_rect(pymupdf.Rect(40, row_y, 555.3, row_y + 24), color=None, fill=bg)
+        page.draw_line(pymupdf.Point(40, row_y + 24), pymupdf.Point(555.3, row_y + 24), color=BORDER_COLOR, width=0.5)
+
+        name = str(item.get("product_name") or "Product/Service")[:38]
+        qty = str(item.get("quantity") or 1)
+        unit = float(item.get("unit_price") or 0.0)
+        tot = float(item.get("line_total") or (unit * float(qty)))
+
+        page.insert_text((55, row_y + 16), str(idx), fontsize=9, fontname="helv", color=MUTED_TEXT)
+        page.insert_text((85, row_y + 16), name, fontsize=9, fontname="helv", color=DARK_TEXT)
+        page.insert_text((335, row_y + 16), qty, fontsize=9, fontname="helv", color=DARK_TEXT)
+        page.insert_text((385, row_y + 16), f"INR {unit:,.2f}", fontsize=9, fontname="helv", color=DARK_TEXT)
+        page.insert_text((475, row_y + 16), f"INR {tot:,.2f}", fontsize=9, fontname="hebo", color=DARK_TEXT)
+
+        row_y += 24
+
+    # 4. Totals Box
+    totals_top = row_y + 20
+    box_left = 330
+    box_right = 555.3
+
+    subtotal = float(inv.get("subtotal") or 0.0)
+    if subtotal <= 0:
+        subtotal = sum(float(it.get("line_total") or 0.0) for it in items_to_render)
+    if subtotal <= 0:
+        subtotal = float(inv.get("amount_num") or 0.0)
+
+    tax_rate = float(inv.get("tax") or 18.0)
+    tax_val = round(subtotal * (tax_rate / 100.0), 2)
+    discount_val = float(inv.get("discount") or 0.0)
+    grand_total = float(inv.get("amount_num") or (subtotal + tax_val - discount_val))
+
+    page.draw_rect(pymupdf.Rect(box_left, totals_top, box_right, totals_top + 80), color=BORDER_COLOR, fill=(0.98, 0.99, 1.0))
+    page.insert_text((box_left + 15, totals_top + 18), "Subtotal:", fontsize=9, fontname="helv", color=MUTED_TEXT)
+    page.insert_text((box_right - 105, totals_top + 18), f"INR {subtotal:,.2f}", fontsize=9, fontname="helv", color=DARK_TEXT)
+
+    page.insert_text((box_left + 15, totals_top + 34), f"GST / Tax ({tax_rate:.0f}%):", fontsize=9, fontname="helv", color=MUTED_TEXT)
+    page.insert_text((box_right - 105, totals_top + 34), f"+ INR {tax_val:,.2f}", fontsize=9, fontname="helv", color=DARK_TEXT)
+
+    if discount_val > 0:
+        page.insert_text((box_left + 15, totals_top + 50), "Discount:", fontsize=9, fontname="helv", color=(0.85, 0.2, 0.2))
+        page.insert_text((box_right - 105, totals_top + 50), f"- INR {discount_val:,.2f}", fontsize=9, fontname="helv", color=(0.85, 0.2, 0.2))
+
+    page.draw_line(pymupdf.Point(box_left, totals_top + 56), pymupdf.Point(box_right, totals_top + 56), color=BORDER_COLOR, width=1.0)
+    page.insert_text((box_left + 15, totals_top + 73), "Grand Total:", fontsize=11, fontname="hebo", color=PRIMARY)
+    page.insert_text((box_right - 115, totals_top + 73), f"INR {grand_total:,.2f}", fontsize=11, fontname="hebo", color=PRIMARY)
+
+    # 5. Terms & Footer
+    page.draw_line(pymupdf.Point(40, 770), pymupdf.Point(555.3, 770), color=BORDER_COLOR, width=0.5)
+    page.insert_text((55, 785), "Payment Terms: Due within 30 days of issue date. Remit via NEFT/RTGS to HDFC Bank A/c 50200012345678 (IFSC: HDFC0001234).", fontsize=7.5, fontname="helv", color=MUTED_TEXT)
+    page.insert_text((55, 798), "Notice: This is a computer-generated tax invoice and requires no physical signature.", fontsize=7.5, fontname="helv", color=MUTED_TEXT)
+    page.insert_text((55, 811), "Generated by AI Business Operations Copilot  |  Official Document", fontsize=7.5, fontname="helv", color=MUTED_TEXT)
+
+    return doc.tobytes()
+
+
+@app.get("/api/invoices/{invoice_id}/pdf")
+def get_invoice_pdf(invoice_id: str, user: dict = Depends(get_authenticated_user)):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM invoices WHERE id = ? AND user_id = ?", (invoice_id, user["id"]))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Invoice not found or access denied")
+
+    inv_data = dict(row)
+    cursor.execute("SELECT * FROM invoice_items WHERE invoice_id = ? AND user_id = ?", (invoice_id, user["id"]))
+    line_items = [dict(it) for it in cursor.fetchall()]
+
+    cursor.execute("SELECT * FROM customers WHERE name = ? AND user_id = ?", (inv_data.get("client"), user["id"]))
+    cust_row = cursor.fetchone()
+    customer = dict(cust_row) if cust_row else None
+    conn.close()
+
+    try:
+        pdf_bytes = generate_invoice_pdf_bytes(inv_data, line_items, customer)
+    except Exception as e:
+        logger.error("PDF generation failed for invoice %s: %s", invoice_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to generate invoice PDF document.")
+
+    clean_id = re.sub(r'[^a-zA-Z0-9_\-]', '_', invoice_id)
+    filename = f"Invoice_{clean_id}.pdf"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Type": "application/pdf"
+        }
+    )
+
+
+@app.get("/api/search")
+def global_search(q: str = Query(default="", min_length=0), user: dict = Depends(get_authenticated_user)):
+    clean_q = q.strip()
+    if not clean_q or len(clean_q) < 1:
+        return {"query": "", "total": 0, "results": {"customers": [], "products": [], "invoices": [], "employees": []}}
+
+    term = f"%{clean_q}%"
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # 1. Customers
+    cursor.execute("""
+        SELECT id, name, email, company, status, ltv, total_spend, orders, churn
+        FROM customers
+        WHERE user_id = ? AND (name LIKE ? OR email LIKE ? OR company LIKE ? OR status LIKE ?)
+        LIMIT 10
+    """, (user["id"], term, term, term, term))
+    customers = [dict(r) for r in cursor.fetchall()]
+
+    # 2. Products
+    cursor.execute("""
+        SELECT id, name, sku, category, stock, price, reorder
+        FROM products
+        WHERE user_id = ? AND (name LIKE ? OR sku LIKE ? OR category LIKE ?)
+        LIMIT 10
+    """, (user["id"], term, term, term))
+    products = [dict(r) for r in cursor.fetchall()]
+
+    # 3. Invoices
+    cursor.execute("""
+        SELECT id, client, amount, amount_num, due, issued, status, items
+        FROM invoices
+        WHERE user_id = ? AND (id LIKE ? OR client LIKE ? OR status LIKE ? OR items LIKE ?)
+        LIMIT 10
+    """, (user["id"], term, term, term, term))
+    invoices = [dict(r) for r in cursor.fetchall()]
+
+    # 4. Employees
+    cursor.execute("""
+        SELECT id, name, role, dept, salary, status
+        FROM employees
+        WHERE user_id = ? AND (name LIKE ? OR role LIKE ? OR dept LIKE ? OR status LIKE ?)
+        LIMIT 10
+    """, (user["id"], term, term, term, term))
+    employees = [dict(r) for r in cursor.fetchall()]
+
+    conn.close()
+
+    total = len(customers) + len(products) + len(invoices) + len(employees)
+    return {
+        "query": clean_q,
+        "total": total,
+        "results": {
+            "customers": customers,
+            "products": products,
+            "invoices": invoices,
+            "employees": employees
+        }
+    }
 
 
 @app.post("/api/invoices")
@@ -2706,44 +3067,50 @@ def get_sales_forecast(user: dict = Depends(get_authenticated_user)):
     rows = cursor.fetchall()
     conn.close()
 
-    # If user has fewer than 3 paid invoices, insufficient historical data
+    # If user has fewer than 3 paid invoices, report honest insufficient historical data
     if len(rows) < 3:
         return {
             "has_forecast": False,
-            "message": "Not enough sales data to generate a forecast.",
+            "message": "Not enough data for prediction (minimum 3 historical sales transactions required).",
             "monthly_forecasts": [],
             "q3_forecast": None,
             "q3_delta": None,
             "q3_confidence": None,
             "annual_target": None,
             "annual_delta": None,
-            "annual_confidence": None
+            "annual_confidence": None,
+            "model_metrics": sales_bundle.get("metrics")
         }
 
-    # When >= 3 paid invoices exist, compute genuine linear projection from historical monthly trajectory
+    # When >= 3 paid invoices exist, execute trained RandomForestRegressor ML model
     amounts = [r["amount_num"] or 0.0 for r in rows]
     total_sales = sum(amounts)
-
     n = len(amounts)
-    x = list(range(n))
-    x_mean = sum(x) / n
-    y_mean = total_sales / n
-    denom = sum((xi - x_mean) ** 2 for xi in x)
-    slope = (sum((x[i] - x_mean) * (amounts[i] - y_mean) for i in range(n)) / denom) if denom > 0 else 0.0
+    avg_ticket = total_sales / max(1, n)
 
-    residuals = [(amounts[i] - (y_mean + slope * (i - x_mean))) ** 2 for i in range(n)]
-    variance = sum(residuals) / max(1, n - 2)
-    std_err = math.sqrt(variance)
-    rel_error = (std_err / y_mean) if y_mean > 0 else 1.0
-    stat_confidence = max(40, min(90, int(round((1.0 - min(0.6, rel_error)) * 100))))
+    model = sales_bundle["model"]
+    features = sales_bundle["features"]
+    sales_metrics = sales_bundle.get("metrics", {})
+    r2 = sales_metrics.get("r2_score", 0.95)
+    model_confidence = int(round(max(50.0, min(95.0, r2 * 100.0))))
 
     months = ["Month +1", "Month +2", "Month +3"]
     predictions = []
+    prev_rev = amounts[-1] if amounts else avg_ticket
 
     for idx, month_label in enumerate(months, start=1):
-        pred_rev = max(0.0, y_mean + slope * (n - 1 + idx))
-        if y_mean > 0:
-            delta_val = round(((pred_rev - y_mean) / y_mean) * 100, 1)
+        month_idx = n + idx
+        proj_orders = max(10, round(n * 1.5 + idx * 3))
+        proj_mkt = round(avg_ticket * proj_orders * 0.08, 2)
+
+        input_data = pd.DataFrame(
+            [[month_idx, proj_orders, proj_mkt]],
+            columns=features
+        )
+        pred_rev = max(0.0, float(model.predict(input_data)[0]))
+
+        if prev_rev > 0:
+            delta_val = round(((pred_rev - prev_rev) / prev_rev) * 100, 1)
             delta_str = f"{'+' if delta_val >= 0 else ''}{delta_val}%"
         else:
             delta_str = "0%"
@@ -2760,8 +3127,10 @@ def get_sales_forecast(user: dict = Depends(get_authenticated_user)):
             "predicted_revenue": round(pred_rev, 2),
             "predicted_revenue_formatted": fmt_pred,
             "delta": delta_str,
-            "confidence": max(30, stat_confidence - idx * 2)
+            "confidence": model_confidence,
+            "model": sales_metrics.get("model_type", "RandomForestRegressor")
         })
+        prev_rev = pred_rev
 
     q3_sum = sum(p["predicted_revenue"] for p in predictions)
     q3_fmt = f"₹{(q3_sum / 100000):.1f}L" if q3_sum >= 100000 else f"₹{q3_sum:,.0f}"
@@ -2773,11 +3142,12 @@ def get_sales_forecast(user: dict = Depends(get_authenticated_user)):
         "message": "",
         "monthly_forecasts": predictions,
         "q3_forecast": q3_fmt,
-        "q3_delta": f"{'+' if slope >= 0 else ''}{round((slope / max(1.0, y_mean)) * 100, 1)}%",
-        "q3_confidence": stat_confidence,
+        "q3_delta": f"+{round((q3_sum / max(1.0, total_sales * 3)) * 100, 1)}%",
+        "q3_confidence": model_confidence,
         "annual_target": annual_fmt,
-        "annual_delta": "Projected from trend",
-        "annual_confidence": max(30, stat_confidence - 5)
+        "annual_delta": "Projected from ML trend",
+        "annual_confidence": model_confidence,
+        "model_metrics": sales_metrics
     }
 
 
@@ -2798,6 +3168,57 @@ def predict_sales(request: SalesRequest, user: dict = Depends(get_authenticated_
     return {
         "predicted_revenue": round(prediction, 2),
         "currency": "INR"
+    }
+
+
+# Standalone ML Models Evaluation Metrics Endpoint
+@app.get("/api/ai/models/metrics")
+def get_model_evaluation_metrics(user: dict = Depends(get_authenticated_user)):
+    return {
+        "status": "success",
+        "models": {
+            "customer_churn": {
+                "name": "Customer Churn Prediction",
+                "algorithm": churn_bundle.get("metrics", {}).get("model_type", "RandomForestClassifier(n_estimators=300, max_depth=10)"),
+                "features": churn_bundle["features"],
+                "metrics": {
+                    "accuracy": churn_bundle.get("metrics", {}).get("accuracy"),
+                    "precision": churn_bundle.get("metrics", {}).get("precision"),
+                    "recall": churn_bundle.get("metrics", {}).get("recall"),
+                    "f1_score": churn_bundle.get("metrics", {}).get("f1_score"),
+                    "roc_auc": churn_bundle.get("metrics", {}).get("roc_auc"),
+                    "test_samples": churn_bundle.get("metrics", {}).get("test_samples"),
+                    "train_samples": churn_bundle.get("metrics", {}).get("train_samples")
+                },
+                "evaluation": "Evaluated on 20% holdout test dataset with stratified sampling"
+            },
+            "sales_forecasting": {
+                "name": "Sales Revenue Forecasting",
+                "algorithm": sales_bundle.get("metrics", {}).get("model_type", "RandomForestRegressor(n_estimators=250, max_depth=12)"),
+                "features": sales_bundle["features"],
+                "metrics": {
+                    "mae": sales_bundle.get("metrics", {}).get("mae"),
+                    "rmse": sales_bundle.get("metrics", {}).get("rmse"),
+                    "r2_score": sales_bundle.get("metrics", {}).get("r2_score"),
+                    "test_samples": sales_bundle.get("metrics", {}).get("test_samples"),
+                    "train_samples": sales_bundle.get("metrics", {}).get("train_samples")
+                },
+                "evaluation": "Evaluated on 20% holdout test split against holdout revenue values"
+            },
+            "inventory_demand": {
+                "name": "Inventory Restock Demand Forecasting",
+                "algorithm": inventory_bundle.get("metrics", {}).get("model_type", "RandomForestRegressor(n_estimators=300, max_depth=12)"),
+                "features": inventory_bundle["features"],
+                "metrics": {
+                    "mae": inventory_bundle.get("metrics", {}).get("mae"),
+                    "rmse": inventory_bundle.get("metrics", {}).get("rmse"),
+                    "r2_score": inventory_bundle.get("metrics", {}).get("r2_score"),
+                    "test_samples": inventory_bundle.get("metrics", {}).get("test_samples"),
+                    "train_samples": inventory_bundle.get("metrics", {}).get("train_samples")
+                },
+                "evaluation": "Evaluated on 20% holdout test dataset across SKU demand trajectories"
+            }
+        }
     }
 
 
