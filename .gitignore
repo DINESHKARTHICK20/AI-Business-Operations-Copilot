@@ -135,6 +135,15 @@ ehthumbs.db
 desktop.ini
 $RECYCLE.BIN/
 
-# ─── 11. Machine Learning Generated Artifacts ───────────────
+# ─── 11. Machine Learning Models & Artifacts ────────────────
+# Ignore generic and temporary model dumps
 *.pkl
 *.joblib
+*.h5
+*.onnx
+
+# Explicitly preserve required production-trained ML model files
+!backend/models/*.pkl
+!backend/models/*.joblib
+!backend/models/**/*.pkl
+!backend/models/**/*.joblib

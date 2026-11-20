@@ -331,9 +331,14 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     ...((options.headers as Record<string, string>) || {}),
   };
 
+  const controller = new AbortController();
+  const timeoutMs = (options as any)?.timeout || 15000;
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
   const executeFetch = async (targetUrl: string) => {
     return await fetch(targetUrl, {
       ...options,
+      signal: controller.signal,
       headers,
       credentials: "include",
     });
@@ -343,11 +348,27 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   try {
     res = await executeFetch(primaryUrl);
   } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err?.name === "AbortError") {
+      throw new Error("Request timed out. The server took too long to respond. Please try again.");
+    }
     console.error(`Network Error on [${method} ${endpoint}]:`, err);
-    throw new Error("Unable to connect to the server. Please verify the application is running.");
+    throw new Error("Unable to connect to the backend server. Please verify the FastAPI backend is running and healthy.");
+  } finally {
+    clearTimeout(timeoutId);
   }
 
   if (!res.ok) {
+    if (res.status === 401) {
+      if (typeof localStorage !== "undefined") {
+        localStorage.removeItem("bizops_session_token");
+        localStorage.removeItem("bizops_user");
+      }
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("bizops_unauthorized"));
+      }
+    }
+
     const errorText = await res.text();
     let errorJson: any = null;
     try {
@@ -356,7 +377,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
       errorJson = null;
     }
 
-    if (!errorJson && (res.status === 500 || res.status === 502 || res.status === 504)) {
+    if (!errorJson && (res.status === 502 || res.status === 503 || res.status === 504)) {
       throw new Error("Unable to connect to the backend server. Please verify the FastAPI backend is running and healthy.");
     }
 
@@ -365,6 +386,10 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
       errorJson?.message ||
       (res.status === 500
         ? "An unexpected server error occurred while processing your request. Please try again."
+        : res.status === 403
+        ? "Access denied. You do not have permission to view or modify this resource."
+        : res.status === 404
+        ? "The requested resource was not found."
         : `HTTP Error ${res.status}: ${res.statusText}`);
     throw new Error(errMsg);
   }
@@ -604,6 +629,14 @@ export const api = {
 
   async markNotificationRead(id: number): Promise<{ status: string }> {
     return request<{ status: string }>(`/api/notifications/${id}/read`, { method: "POST" });
+  },
+
+  async deleteNotification(id: number): Promise<{ status: string }> {
+    return request<{ status: string }>(`/api/notifications/${id}`, { method: "DELETE" });
+  },
+
+  async clearAllNotifications(): Promise<{ status: string }> {
+    return request<{ status: string }>("/api/notifications", { method: "DELETE" });
   },
 
   // Authentication & Users

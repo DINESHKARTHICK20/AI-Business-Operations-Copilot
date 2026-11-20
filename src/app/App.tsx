@@ -191,14 +191,15 @@ function GradientButton({ children, onClick, size = "md", variant = "primary", c
   );
 }
 
-function SearchBar({ value, onChange, placeholder = "Search..." }: { value?: string; onChange?: (val: string) => void; placeholder?: string }) {
+function SearchBar({ value, onChange, onKeyDown, placeholder = "Search..." }: { value?: string; onChange?: (val: string) => void; onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void; placeholder?: string }) {
   return (
     <div className="relative">
       <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
       <input
         value={value || ""}
         onChange={e => onChange && onChange(e.target.value)}
-        className="pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 w-64"
+        onKeyDown={onKeyDown}
+        className="pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 w-48 sm:w-64 transition-all"
         placeholder={placeholder}
       />
     </div>
@@ -224,6 +225,112 @@ function StatusBadge({ status }: { status: string }) {
     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${map[status] || "bg-slate-100 text-slate-600"}`}>
       {status}
     </span>
+  );
+}
+
+function ErrorBanner({
+  message,
+  onRetry,
+}: {
+  message?: string | null;
+  onRetry?: () => void;
+}) {
+  if (!message) return null;
+  return (
+    <div className="flex items-center justify-between p-4 bg-rose-50 border border-rose-200 rounded-2xl text-rose-800 text-sm mb-4 shadow-sm">
+      <div className="flex items-center gap-3">
+        <AlertTriangle size={18} className="text-rose-500 shrink-0" />
+        <div>
+          <p className="font-medium">{message}</p>
+          <p className="text-xs text-rose-600 mt-0.5">Please check your network connection or backend service status.</p>
+        </div>
+      </div>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-colors shrink-0 ml-4 cursor-pointer"
+        >
+          <RefreshCw size={12} />
+          Retry
+        </button>
+      )}
+    </div>
+  );
+}
+
+function SkeletonKPI() {
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm animate-pulse">
+      <div className="flex items-center justify-between mb-4">
+        <div className="w-10 h-10 rounded-xl bg-slate-100" />
+        <div className="w-12 h-5 rounded-lg bg-slate-100" />
+      </div>
+      <div className="w-24 h-4 bg-slate-100 rounded mb-2" />
+      <div className="w-32 h-7 bg-slate-200 rounded" />
+    </div>
+  );
+}
+
+function SkeletonChart() {
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm animate-pulse">
+      <div className="flex items-center justify-between mb-6">
+        <div className="w-36 h-5 bg-slate-200 rounded" />
+        <div className="w-20 h-4 bg-slate-100 rounded" />
+      </div>
+      <div className="w-full h-56 bg-slate-100 rounded-xl flex items-end p-4 gap-2">
+        <div className="flex-1 bg-slate-200 rounded h-1/2" />
+        <div className="flex-1 bg-slate-200 rounded h-3/4" />
+        <div className="flex-1 bg-slate-200 rounded h-2/3" />
+        <div className="flex-1 bg-slate-200 rounded h-full" />
+        <div className="flex-1 bg-slate-200 rounded h-4/5" />
+      </div>
+    </div>
+  );
+}
+
+function SkeletonTable({ rows = 5 }: { rows?: number }) {
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden animate-pulse">
+      <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+        <div className="w-48 h-6 bg-slate-200 rounded" />
+        <div className="w-24 h-6 bg-slate-100 rounded" />
+      </div>
+      <div className="divide-y divide-slate-100">
+        {Array.from({ length: rows }).map((_, i) => (
+          <div key={i} className="p-4 flex items-center justify-between gap-4">
+            <div className="w-1/4 h-4 bg-slate-200 rounded" />
+            <div className="w-1/4 h-4 bg-slate-100 rounded" />
+            <div className="w-1/6 h-4 bg-slate-100 rounded" />
+            <div className="w-16 h-4 bg-slate-200 rounded" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function NotFoundPage({ onNavigateHome }: { onNavigateHome: () => void }) {
+  return (
+    <div className="min-h-[70vh] flex flex-col items-center justify-center text-center p-8">
+      <div className="w-20 h-20 rounded-3xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 mb-6 shadow-sm">
+        <AlertTriangle size={40} />
+      </div>
+      <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight mb-2">404</h1>
+      <h2 className="text-xl font-bold text-slate-800 mb-2">Page Not Found</h2>
+      <p className="text-sm text-slate-500 max-w-md mb-8 leading-relaxed">
+        The page or view you are looking for does not exist or has been moved. You can return safely to the business operations dashboard.
+      </p>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onNavigateHome}
+          className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 text-white rounded-xl text-sm font-semibold shadow-md shadow-indigo-500/20 transition-all cursor-pointer"
+        >
+          <Home size={16} />
+          Back to Dashboard
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -327,7 +434,8 @@ function Sidebar({ page, setPage, collapsed, setCollapsed, user, onLogout }: {
   );
 }
 
-function TopBar({ page, setPage, user }: { page: Page; setPage: (p: Page) => void; user: UserSession | null }) {
+function TopBar({ page, setPage, user, onToggleSidebar }: { page: Page; setPage: (p: Page) => void; user: UserSession | null; onToggleSidebar?: () => void }) {
+  const [globalSearch, setGlobalSearch] = useState("");
   const labels: Record<string, string> = {
     dashboard: "Dashboard", "business-health": "AI Business Health", "action-center": "AI Action Center", copilot: "AI Copilot", customers: "Customers",
     sales: "Sales Analytics", inventory: "Inventory", invoices: "Invoices",
@@ -335,14 +443,48 @@ function TopBar({ page, setPage, user }: { page: Page; setPage: (p: Page) => voi
     settings: "Settings", profile: "Profile", pricing: "Pricing & Billing",
     "design-system": "Design System", profit: "Profit Analyzer",
   };
+
+  const handleGlobalSearch = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && globalSearch.trim()) {
+      const q = globalSearch.trim().toLowerCase();
+      if (q.includes("cust")) setPage("customers");
+      else if (q.includes("sale") || q.includes("rev")) setPage("sales");
+      else if (q.includes("inv") || q.includes("bill")) setPage("invoices");
+      else if (q.includes("item") || q.includes("stock") || q.includes("prod")) setPage("inventory");
+      else if (q.includes("emp") || q.includes("staff") || q.includes("hr")) setPage("employees");
+      else if (q.includes("rep")) setPage("reports");
+      else if (q.includes("prof") || q.includes("cost") || q.includes("margin")) setPage("profit");
+      else if (q.includes("act") || q.includes("task")) setPage("action-center");
+      else if (q.includes("health")) setPage("business-health");
+      else if (q.includes("notif")) setPage("notifications");
+      else if (q.includes("set") || q.includes("pref")) setPage("settings");
+      else if (q.includes("price") || q.includes("plan")) setPage("pricing");
+      else setPage("copilot");
+    }
+  };
+
   return (
-    <header className="h-14 bg-white border-b border-slate-100 flex items-center px-6 gap-4 shrink-0">
-      <h1 className="font-semibold text-slate-800 text-sm">{labels[page] || page}</h1>
+    <header className="h-14 bg-white border-b border-slate-100 flex items-center px-4 sm:px-6 gap-3 sm:gap-4 shrink-0">
+      {onToggleSidebar && (
+        <button
+          onClick={onToggleSidebar}
+          className="md:hidden p-1.5 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 shrink-0"
+          title="Toggle Navigation Menu"
+        >
+          <Menu size={16} />
+        </button>
+      )}
+      <h1 className="font-semibold text-slate-800 text-sm truncate">{labels[page] || page}</h1>
 
       <div className="flex-1" />
-      <SearchBar placeholder="Search anything..." />
+      <SearchBar
+        value={globalSearch}
+        onChange={setGlobalSearch}
+        onKeyDown={handleGlobalSearch}
+        placeholder="Search operations... (Enter to go)"
+      />
       <button
-        className="relative w-8 h-8 rounded-xl border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-50"
+        className="relative w-8 h-8 rounded-xl border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-50 shrink-0"
         onClick={() => setPage("notifications")}
       >
         <Bell size={15} />
@@ -350,12 +492,12 @@ function TopBar({ page, setPage, user }: { page: Page; setPage: (p: Page) => voi
       </button>
       <button
         onClick={() => setPage("profile")}
-        className="flex items-center gap-2 px-2 py-1 rounded-xl hover:bg-slate-50 transition-colors"
+        className="flex items-center gap-2 px-2 py-1 rounded-xl hover:bg-slate-50 transition-colors shrink-0"
       >
         <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center text-white text-xs font-semibold">
           {getInitials(user?.name)}
         </div>
-        <span className="text-sm font-medium text-slate-700">{user?.name || "User"}</span>
+        <span className="text-sm font-medium text-slate-700 hidden sm:inline">{user?.name || "User"}</span>
         <ChevronDown size={13} className="text-slate-400" />
       </button>
     </header>
@@ -364,12 +506,38 @@ function TopBar({ page, setPage, user }: { page: Page; setPage: (p: Page) => voi
 
 function AppLayout({ page, setPage, user, onLogout, children }: { page: Page; setPage: (p: Page) => void; user: UserSession | null; onLogout: () => void; children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [isMobileOpen, setIsMobileOpen] = useState(false);
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden" style={{ fontFamily: "'Inter', sans-serif" }}>
-      <Sidebar page={page} setPage={setPage} collapsed={collapsed} setCollapsed={setCollapsed} user={user} onLogout={onLogout} />
+      {/* Mobile backdrop */}
+      {isMobileOpen && (
+        <div
+          className="fixed inset-0 bg-slate-900/60 z-40 md:hidden backdrop-blur-xs transition-opacity"
+          onClick={() => setIsMobileOpen(false)}
+        />
+      )}
+      {/* Sidebar (desktop + mobile drawer) */}
+      <div className={`fixed inset-y-0 left-0 z-50 transform md:relative md:translate-x-0 transition-transform duration-300 ease-in-out ${isMobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
+        <Sidebar
+          page={page}
+          setPage={(p) => {
+            setPage(p);
+            setIsMobileOpen(false);
+          }}
+          collapsed={collapsed}
+          setCollapsed={setCollapsed}
+          user={user}
+          onLogout={onLogout}
+        />
+      </div>
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        <TopBar page={page} setPage={setPage} user={user} />
-        <main className="flex-1 overflow-y-auto p-6">
+        <TopBar
+          page={page}
+          setPage={setPage}
+          user={user}
+          onToggleSidebar={() => setIsMobileOpen(!isMobileOpen)}
+        />
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6">
           {children}
         </main>
       </div>
@@ -1146,21 +1314,38 @@ function DashboardPage({ setPage, user }: { setPage: (p: Page) => void; user: Us
   const [activity, setActivity] = useState<DashboardActivity[]>([]);
   const [salesOverview, setSalesOverview] = useState<SalesOverview | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
 
-  useEffect(() => {
-    Promise.all([
-      api.getDashboardStats().catch(() => null),
-      api.getDashboardInsights().catch(() => []),
-      api.getDashboardActivity().catch(() => []),
-      api.getSalesOverview().catch(() => null),
-    ]).then(([statsData, insightsData, activityData, salesData]) => {
+  const loadDashboard = async () => {
+    try {
+      const [statsData, insightsData, activityData, salesData] = await Promise.all([
+        api.getDashboardStats().catch(() => null),
+        api.getDashboardInsights().catch(() => []),
+        api.getDashboardActivity().catch(() => []),
+        api.getSalesOverview().catch(() => null),
+      ]);
       if (statsData) setStats(statsData);
       if (insightsData.length > 0) setInsights(insightsData);
       if (activityData.length > 0) setActivity(activityData);
       if (salesData) setSalesOverview(salesData);
+    } catch (err: any) {
+      setDashboardError(err?.message || "Failed to load dashboard data.");
+    } finally {
       setLoading(false);
-    });
+      setIsRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    loadDashboard();
   }, []);
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    setDashboardError(null);
+    await loadDashboard();
+  };
 
   const kpis = stats?.kpis || {
     today_revenue: "₹0", today_revenue_change: "0%",
@@ -1178,6 +1363,30 @@ function DashboardPage({ setPage, user }: { setPage: (p: Page) => void; user: Us
 
   const lowStockItems = stats?.low_stock_alerts || [];
 
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="w-56 h-8 bg-slate-200 rounded-xl animate-pulse" />
+          <div className="w-24 h-8 bg-slate-200 rounded-xl animate-pulse" />
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <SkeletonKPI key={i} />
+          ))}
+        </div>
+        <div className="grid grid-cols-3 gap-5">
+          <div className="col-span-2">
+            <SkeletonChart />
+          </div>
+          <div className="col-span-1">
+            <SkeletonChart />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Welcome Banner */}
@@ -1186,7 +1395,18 @@ function DashboardPage({ setPage, user }: { setPage: (p: Page) => void; user: Us
           <h1 className="text-xl font-bold text-slate-800">Welcome back, {user?.name || "User"} 👋</h1>
           <p className="text-xs text-slate-500 mt-0.5">Here is your business operations overview for today.</p>
         </div>
+        <button
+          onClick={handleRefresh}
+          disabled={isRefreshing}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 text-xs font-medium shadow-2xs transition-colors disabled:opacity-50 cursor-pointer"
+          title="Refresh Dashboard"
+        >
+          <RefreshCw size={13} className={isRefreshing ? "animate-spin text-indigo-500" : ""} />
+          <span>{isRefreshing ? "Refreshing..." : "Refresh"}</span>
+        </button>
       </div>
+
+      <ErrorBanner message={dashboardError} onRetry={handleRefresh} />
 
       {/* KPI row */}
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
@@ -1224,17 +1444,25 @@ function DashboardPage({ setPage, user }: { setPage: (p: Page) => void; user: Us
               <option>Dec</option>
             </select>
           </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={currentRevenueData}>
-              <CartesianGrid key="cg" strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis key="x" dataKey="month" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
-              <YAxis key="y" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={v => `₹${v / 1000}k`} />
-              <Tooltip key="tt" formatter={(v: any) => [`₹${v.toLocaleString()}`, ""]} contentStyle={{ fontSize: 12, borderRadius: 10, border: "1px solid #e2e8f0" }} />
-              <Legend key="lg" wrapperStyle={{ fontSize: 11 }} />
-              <Area key="revenue" type="monotone" dataKey="revenue" name="Revenue" stroke="#4f46e5" strokeWidth={2.5} fill="url(#dash-rev)" dot={false} />
-              <Area key="expenses" type="monotone" dataKey="expenses" name="Expenses" stroke="#8b5cf6" strokeWidth={2} fill="url(#dash-exp)" dot={false} />
-            </AreaChart>
-          </ResponsiveContainer>
+          {currentRevenueData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={currentRevenueData}>
+                <CartesianGrid key="cg" strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis key="x" dataKey="month" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+                <YAxis key="y" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={v => `₹${v / 1000}k`} />
+                <Tooltip key="tt" formatter={(v: any) => [`₹${v.toLocaleString()}`, ""]} contentStyle={{ fontSize: 12, borderRadius: 10, border: "1px solid #e2e8f0" }} />
+                <Legend key="lg" wrapperStyle={{ fontSize: 11 }} />
+                <Area key="revenue" type="monotone" dataKey="revenue" name="Revenue" stroke="#4f46e5" strokeWidth={2.5} fill="url(#dash-rev)" dot={false} />
+                <Area key="expenses" type="monotone" dataKey="expenses" name="Expenses" stroke="#8b5cf6" strokeWidth={2} fill="url(#dash-exp)" dot={false} />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-56 flex flex-col items-center justify-center text-center text-slate-400">
+              <TrendingUp size={32} className="text-slate-300 mb-2" />
+              <p className="text-xs font-semibold text-slate-600">No revenue data recorded</p>
+              <p className="text-[11px] text-slate-400 mt-0.5">Create your first invoice to generate revenue trends.</p>
+            </div>
+          )}
         </div>
         <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm flex flex-col justify-between">
           <h2 className="text-sm font-semibold text-slate-800 mb-1">Sales by Category</h2>
@@ -2466,6 +2694,11 @@ function CustomersPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
 
+  const [loading, setLoading] = useState(true);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
   // Form State
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -2475,9 +2708,15 @@ function CustomersPage() {
   const [orders, setOrders] = useState(0);
 
   const fetchCustomers = () => {
+    setLoading(true);
+    setPageError(null);
     api.getCustomers()
-      .then(data => setCustomersList(data))
-      .catch(err => console.error("Error fetching customers:", err));
+      .then(data => setCustomersList(data || []))
+      .catch(err => {
+        console.error("Error fetching customers:", err);
+        setPageError(err?.message || "Failed to load customers from backend.");
+      })
+      .finally(() => setLoading(false));
   };
 
   useEffect(() => {
@@ -2514,6 +2753,7 @@ function CustomersPage() {
     setStatus("Active");
     setLtv("₹5,00,000");
     setOrders(10);
+    setFormError(null);
     setIsModalOpen(true);
   };
 
@@ -2526,24 +2766,30 @@ function CustomersPage() {
     setStatus(cust.status);
     setLtv(cust.ltv);
     setOrders(cust.orders);
+    setFormError(null);
     setIsModalOpen(true);
   };
 
   const handleDeleteCustomer = async (id: number, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (confirm("Are you sure you want to delete this customer?")) {
-      try {
-        await api.deleteCustomer(id);
-        fetchCustomers();
-        if (selected?.id === id) setSelected(null);
-      } catch (err) {
-        console.error("Delete customer error:", err);
-      }
+    if (!window.confirm("Are you sure you want to delete this customer?")) return;
+    try {
+      await api.deleteCustomer(id);
+      fetchCustomers();
+      if (selected?.id === id) setSelected(null);
+    } catch (err) {
+      console.error("Delete customer error:", err);
     }
   };
 
   const handleSaveCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!name.trim() || !email.trim()) {
+      setFormError("Please fill in all required fields (Name and Email).");
+      return;
+    }
+    setFormError(null);
+    setIsSaving(true);
     try {
       if (editingCustomer) {
         await api.updateCustomer(editingCustomer.id, { name, email, company, status, ltv, orders });
@@ -2552,10 +2798,15 @@ function CustomersPage() {
       }
       setIsModalOpen(false);
       fetchCustomers();
-    } catch (err) {
-      console.error("Save customer error:", err);
+    } catch (err: any) {
+      setFormError(err?.message || "Failed to save customer record.");
+    } finally {
+      setIsSaving(false);
     }
   };
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const filteredCustomers = customersList.filter(c =>
     c.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -2563,8 +2814,13 @@ function CustomersPage() {
     c.email.toLowerCase().includes(search.toLowerCase())
   );
 
+  const totalPages = Math.max(1, Math.ceil(filteredCustomers.length / pageSize));
+  const paginatedCustomers = filteredCustomers.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
   return (
     <div className="space-y-5">
+      <ErrorBanner message={pageError} onRetry={fetchCustomers} />
+
       {/* Analytics cards */}
       <div className="grid grid-cols-4 gap-4">
         {[
@@ -2580,7 +2836,7 @@ function CustomersPage() {
         <div className="flex-1 bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
           <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-100">
             <h2 className="text-sm font-semibold text-slate-800 flex-1">All Customers ({filteredCustomers.length})</h2>
-            <SearchBar value={search} onChange={setSearch} placeholder="Search customers..." />
+            <SearchBar value={search} onChange={(val) => { setSearch(val); setCurrentPage(1); }} placeholder="Search customers..." />
             <button className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50"><Filter size={13} />Filter</button>
             <div className="flex items-center border border-slate-200 rounded-xl overflow-hidden">
               <button onClick={() => setView("table")} className={`p-2 ${view === "table" ? "bg-indigo-50 text-indigo-600" : "text-slate-400 hover:bg-slate-50"}`}><List size={14} /></button>
@@ -2589,7 +2845,11 @@ function CustomersPage() {
             <GradientButton size="sm" onClick={openAddModal}><Plus size={13} />Add Customer</GradientButton>
           </div>
 
-          {view === "table" ? (
+          {loading ? (
+            <div className="p-4">
+              <SkeletonTable rows={5} />
+            </div>
+          ) : view === "table" ? (
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -2601,7 +2861,7 @@ function CustomersPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-50">
                   {filteredCustomers.length > 0 ? (
-                    filteredCustomers.map(c => (
+                    paginatedCustomers.map(c => (
                       <tr
                         key={c.id}
                         onClick={() => handleSelectCustomer(c)}
@@ -2657,7 +2917,7 @@ function CustomersPage() {
           ) : (
             <div className="grid grid-cols-2 gap-4 p-5">
               {filteredCustomers.length > 0 ? (
-                filteredCustomers.map(c => (
+                paginatedCustomers.map(c => (
                 <div key={c.id} onClick={() => handleSelectCustomer(c)} className={`p-4 rounded-xl border transition-all cursor-pointer ${selected?.id === c.id ? "border-indigo-300 bg-indigo-50/40 shadow-sm" : "border-slate-100 hover:border-slate-200"}`}>
                   <div className="flex items-start justify-between mb-3">
                     <div className="flex items-center gap-3">
@@ -2687,13 +2947,65 @@ function CustomersPage() {
             ) : (
               <div className="col-span-2 py-12 text-center text-slate-400">
                 <Users size={32} className="mx-auto mb-2 text-slate-300" />
-                <p className="text-sm font-medium text-slate-600">No customers found</p>
-                <p className="text-xs text-slate-400 mt-1">Get started by adding your first business customer.</p>
-                <button onClick={openAddModal} className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-semibold hover:bg-indigo-700 transition-colors shadow-sm">
-                  <Plus size={14} /> Add Customer
-                </button>
+                {search ? (
+                  <>
+                    <p className="text-sm font-medium text-slate-600">No customers found matching &quot;{search}&quot;</p>
+                    <p className="text-xs text-slate-400 mt-1">Check your keyword or reset search filter.</p>
+                    <button onClick={() => setSearch("")} className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl text-xs font-semibold hover:bg-indigo-100 transition-colors shadow-sm">
+                      Clear Search
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm font-medium text-slate-600">No customers found</p>
+                    <p className="text-xs text-slate-400 mt-1">Get started by adding your first business customer.</p>
+                    <button onClick={openAddModal} className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-semibold hover:bg-indigo-700 transition-colors shadow-sm">
+                      <Plus size={14} /> Add Customer
+                    </button>
+                  </>
+                )}
               </div>
             )}
+            </div>
+          )}
+
+          {filteredCustomers.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3.5 border-t border-slate-100 bg-slate-50/50 text-xs text-slate-600">
+              <div className="flex items-center gap-2">
+                <span>Rows per page:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+                  className="border border-slate-200 rounded-lg px-2 py-1 bg-white text-xs outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value={5}>5</option>
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                </select>
+                <span className="text-slate-400 ml-2">
+                  Showing {filteredCustomers.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filteredCustomers.length)} of {filteredCustomers.length}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage <= 1}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors"
+                >
+                  Previous
+                </button>
+                <span className="px-2 font-medium text-slate-700">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage >= totalPages}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors"
+                >
+                  Next
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -2762,7 +3074,7 @@ function CustomersPage() {
 
             <div className="grid grid-cols-2 gap-2">
               <button onClick={() => openEditModal(selected)} className="text-xs py-2 px-3 bg-indigo-50 text-indigo-700 rounded-xl font-medium hover:bg-indigo-100">Edit Details</button>
-              <button onClick={() => alert(`Email draft prepared for ${selected.email}`)} className="text-xs py-2 px-3 bg-violet-50 text-violet-700 rounded-xl font-medium hover:bg-violet-100">Send Email</button>
+              <button onClick={() => { window.location.href = `mailto:${selected.email}?subject=Follow-up from Operations&body=Hello ${selected.name},%0D%0A%0D%0AReaching out regarding your account.`; }} className="text-xs py-2 px-3 bg-violet-50 text-violet-700 rounded-xl font-medium hover:bg-violet-100">Send Email</button>
             </div>
           </div>
         )}
@@ -2776,6 +3088,12 @@ function CustomersPage() {
               <h3 className="text-sm font-bold text-slate-800">{editingCustomer ? "Edit Customer" : "Add New Customer"}</h3>
               <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
             </div>
+            {formError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs flex items-center gap-2">
+                <AlertTriangle size={14} className="shrink-0" />
+                <span>{formError}</span>
+              </div>
+            )}
             <form onSubmit={handleSaveCustomer} className="space-y-3 text-xs">
               <div>
                 <label className="block font-medium text-slate-700 mb-1">Customer Full Name *</label>
@@ -2809,7 +3127,10 @@ function CustomersPage() {
               </div>
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 rounded-xl text-slate-600 bg-slate-100 hover:bg-slate-200 font-medium">Cancel</button>
-                <GradientButton size="sm"><CheckCircle size={13} />{editingCustomer ? "Save Changes" : "Create Customer"}</GradientButton>
+                <GradientButton size="sm" disabled={isSaving}>
+                  {isSaving ? <RefreshCw size={13} className="animate-spin" /> : <CheckCircle size={13} />}
+                  {isSaving ? "Saving..." : (editingCustomer ? "Save Changes" : "Create Customer")}
+                </GradientButton>
               </div>
             </form>
           </div>
@@ -2846,6 +3167,21 @@ function SalesPage() {
     conversion_rate_change: "Not available"
   };
 
+  const handleExportSalesCSV = () => {
+    const isDaily = period === "daily";
+    const data = isDaily ? dailyData : monthlyData;
+    const headers = [isDaily ? "Day" : "Month", isDaily ? "Sales (INR)" : "Revenue (INR)", "Orders"];
+    const rows = data.map((d: any) => [isDaily ? d.day : d.month, isDaily ? d.sales : d.revenue, d.orders]);
+    const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `sales_revenue_${period}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-4 gap-4">
@@ -2865,7 +3201,7 @@ function SalesPage() {
               {["daily", "monthly"].map(p => (
                 <button key={p} onClick={() => setPeriod(p)} className={`text-xs px-3 py-1.5 rounded-lg font-medium capitalize transition-colors ${period === p ? "bg-indigo-500 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>{p}</button>
               ))}
-              <button onClick={() => alert("Sales trend export generated")} className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"><Download size={12} />Export</button>
+              <button onClick={handleExportSalesCSV} className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"><Download size={12} />Export</button>
             </div>
           </div>
           <ResponsiveContainer width="100%" height={240}>
@@ -3004,6 +3340,12 @@ function InventoryPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
+  const [loading, setLoading] = useState(true);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [restockMsg, setRestockMsg] = useState<string | null>(null);
+
   // Form State
   const [name, setName] = useState("");
   const [sku, setSku] = useState("");
@@ -3014,9 +3356,15 @@ function InventoryPage() {
   const [trend, setTrend] = useState("+10%");
 
   const fetchInventory = () => {
+    setLoading(true);
+    setPageError(null);
     api.getInventory()
-      .then(data => setProductsList(data))
-      .catch(() => { });
+      .then(data => setProductsList(data || []))
+      .catch(err => {
+        console.error("Error fetching inventory:", err);
+        setPageError(err?.message || "Failed to load inventory from backend.");
+      })
+      .finally(() => setLoading(false));
   };
 
   useEffect(() => {
@@ -3046,7 +3394,8 @@ function InventoryPage() {
       const updated = await api.restockProduct(productId, qty);
       setSelected(updated);
       fetchInventory();
-      alert(`Successfully restocked ${qty} units for ${updated.name}!`);
+      setRestockMsg(`Successfully restocked ${qty} units for ${updated.name}!`);
+      setTimeout(() => setRestockMsg(null), 3500);
     } catch (err) {
       console.error("Restock error:", err);
     }
@@ -3061,6 +3410,7 @@ function InventoryPage() {
     setReorder(30);
     setPrice("₹49,999");
     setTrend("+5%");
+    setFormError(null);
     setIsModalOpen(true);
   };
 
@@ -3074,24 +3424,30 @@ function InventoryPage() {
     setReorder(prod.reorder);
     setPrice(prod.price);
     setTrend(prod.trend);
+    setFormError(null);
     setIsModalOpen(true);
   };
 
   const handleDeleteProduct = async (id: number, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (confirm("Are you sure you want to delete this product?")) {
-      try {
-        await api.deleteProduct(id);
-        fetchInventory();
-        if (selected?.id === id) setSelected(null);
-      } catch (err) {
-        console.error("Delete product error:", err);
-      }
+    if (!window.confirm("Are you sure you want to delete this product?")) return;
+    try {
+      await api.deleteProduct(id);
+      fetchInventory();
+      if (selected?.id === id) setSelected(null);
+    } catch (err) {
+      console.error("Delete product error:", err);
     }
   };
 
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!name.trim() || !category.trim()) {
+      setFormError("Please fill in all required fields (Product Name and Category).");
+      return;
+    }
+    setFormError(null);
+    setIsSaving(true);
     try {
       if (editingProduct) {
         await api.updateProduct(editingProduct.id, { name, sku, category, stock, reorder, price, trend });
@@ -3100,8 +3456,10 @@ function InventoryPage() {
       }
       setIsModalOpen(false);
       fetchInventory();
-    } catch (err) {
-      console.error("Save product error:", err);
+    } catch (err: any) {
+      setFormError(err?.message || "Failed to save product record.");
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -3113,6 +3471,8 @@ function InventoryPage() {
 
   return (
     <div className="space-y-5">
+      <ErrorBanner message={pageError} onRetry={fetchInventory} />
+
       <div className="grid grid-cols-4 gap-4">
         {[
           { title: "Total Products", value: `${productsList.length}`, change: "+5%", icon: Package, color: "bg-indigo-500" },
@@ -3129,8 +3489,13 @@ function InventoryPage() {
             <button className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50"><Filter size={13} />Filter</button>
             <GradientButton size="sm" onClick={openAddModal}><Plus size={13} />Add Product</GradientButton>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full">
+          {loading ? (
+            <div className="p-4">
+              <SkeletonTable rows={5} />
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
               <thead>
                 <tr className="border-b border-slate-50">
                   {["Product", "SKU", "Category", "Stock", "Reorder At", "Price", "Status", "Trend", "Actions"].map(h => (
@@ -3189,7 +3554,8 @@ function InventoryPage() {
               </tbody>
             </table>
           </div>
-        </div>
+        )}
+      </div>
         {selected && (
           <div className="w-72 shrink-0 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
             <div className="flex items-center justify-between">
@@ -3203,6 +3569,12 @@ function InventoryPage() {
               <p className="font-semibold text-slate-800">{selected.name}</p>
               <p className="text-xs text-slate-500 font-mono mt-0.5">{selected.sku}</p>
             </div>
+            {restockMsg && (
+              <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl text-xs flex items-center gap-2">
+                <CheckCircle size={14} className="shrink-0" />
+                <span>{restockMsg}</span>
+              </div>
+            )}
             <div className="space-y-2.5">
               {[
                 { label: "Category", value: selected.category },
@@ -3257,11 +3629,11 @@ function InventoryPage() {
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => handleRestock(selected.id, demandForecast?.recommended_reorder || 50)}
-                className="text-xs py-2 bg-indigo-50 text-indigo-700 rounded-xl font-medium hover:bg-indigo-100"
+                className="text-xs py-2 bg-indigo-50 text-indigo-700 rounded-xl font-medium hover:bg-indigo-100 cursor-pointer"
               >
                 Restock Order
               </button>
-              <button onClick={() => openEditModal(selected)} className="text-xs py-2 bg-violet-50 text-violet-700 rounded-xl font-medium hover:bg-violet-100">Edit Product</button>
+              <button onClick={() => openEditModal(selected)} className="text-xs py-2 bg-violet-50 text-violet-700 rounded-xl font-medium hover:bg-violet-100 cursor-pointer">Edit Product</button>
             </div>
           </div>
         )}
@@ -3275,6 +3647,12 @@ function InventoryPage() {
               <h3 className="text-sm font-bold text-slate-800">{editingProduct ? "Edit Product" : "Add New Product"}</h3>
               <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
             </div>
+            {formError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs flex items-center gap-2">
+                <AlertTriangle size={14} className="shrink-0" />
+                <span>{formError}</span>
+              </div>
+            )}
             <form onSubmit={handleSaveProduct} className="space-y-3 text-xs">
               <div>
                 <label className="block font-medium text-slate-700 mb-1">Product Name *</label>
@@ -3318,7 +3696,10 @@ function InventoryPage() {
               </div>
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 rounded-xl text-slate-600 bg-slate-100 hover:bg-slate-200 font-medium">Cancel</button>
-                <GradientButton size="sm"><CheckCircle size={13} />{editingProduct ? "Save Product" : "Add Product"}</GradientButton>
+                <GradientButton size="sm" disabled={isSaving}>
+                  {isSaving ? <RefreshCw size={13} className="animate-spin" /> : <CheckCircle size={13} />}
+                  {isSaving ? "Saving..." : (editingProduct ? "Save Changes" : "Add Product")}
+                </GradientButton>
               </div>
             </form>
           </div>
@@ -3336,6 +3717,103 @@ function parsePriceNum(priceStr: string | number | undefined): number {
   const cleaned = String(priceStr).replace(/₹|,|\/mo/g, "").trim();
   const val = parseFloat(cleaned);
   return isNaN(val) ? 0 : val;
+}
+
+function downloadInvoicePDF(inv: Invoice, companyName = "AI Business Operations Copilot") {
+  const lineItemsHtml = (inv.line_items && inv.line_items.length > 0)
+    ? inv.line_items.map(li => `
+      <tr>
+        <td style="padding:10px;border-bottom:1px solid #e2e8f0;">${li.product_name}</td>
+        <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:center;">${li.quantity}</td>
+        <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:right;">₹${(li.unit_price || 0).toLocaleString()}</td>
+        <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:600;">₹${(li.line_total || 0).toLocaleString()}</td>
+      </tr>
+    `).join("")
+    : `
+      <tr>
+        <td style="padding:10px;border-bottom:1px solid #e2e8f0;">${inv.items || "Business Operations Services"}</td>
+        <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:center;">1</td>
+        <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:right;">${inv.amount}</td>
+        <td style="padding:10px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:600;">${inv.amount}</td>
+      </tr>
+    `;
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Invoice ${inv.id} - ${inv.client}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 40px; color: #1e293b; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #4f46e5; padding-bottom: 20px; margin-bottom: 30px; }
+    .title { font-size: 28px; font-weight: bold; color: #4f46e5; margin: 0; }
+    .company { font-size: 14px; color: #64748b; margin-top: 5px; }
+    .meta { text-align: right; }
+    .inv-num { font-size: 18px; font-weight: 600; color: #0f172a; }
+    .status { display: inline-block; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; margin-top: 6px; background: #e0e7ff; color: #4338ca; }
+    .details { display: flex; justify-content: space-between; margin-bottom: 30px; }
+    .col { flex: 1; }
+    .label { font-size: 12px; text-transform: uppercase; color: #94a3b8; font-weight: 600; margin-bottom: 4px; }
+    .value { font-size: 14px; color: #334155; font-weight: 500; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+    th { background: #f8fafc; padding: 12px 10px; text-align: left; font-size: 12px; text-transform: uppercase; color: #64748b; border-bottom: 2px solid #cbd5e1; }
+    .totals { width: 320px; margin-left: auto; margin-bottom: 40px; }
+    .row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; color: #64748b; }
+    .total-row { display: flex; justify-content: space-between; padding: 10px 0; font-size: 18px; font-weight: bold; color: #0f172a; border-top: 2px solid #cbd5e1; }
+    .footer { text-align: center; color: #94a3b8; font-size: 12px; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div class="title">INVOICE</div>
+      <div class="company">${companyName}</div>
+    </div>
+    <div class="meta">
+      <div class="inv-num">${inv.id}</div>
+      <div class="status">${inv.status}</div>
+    </div>
+  </div>
+  <div class="details">
+    <div class="col">
+      <div class="label">Billed To</div>
+      <div class="value" style="font-size: 16px; font-weight: 600;">${inv.client}</div>
+    </div>
+    <div class="col" style="text-align: right;">
+      <div class="label">Invoice Date: <span class="value">${inv.issued || "N/A"}</span></div>
+      <div class="label">Due Date: <span class="value" style="color: #e11d48;">${inv.due || "N/A"}</span></div>
+    </div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Description</th>
+        <th style="text-align:center;">Qty</th>
+        <th style="text-align:right;">Unit Price</th>
+        <th style="text-align:right;">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${lineItemsHtml}
+    </tbody>
+  </table>
+  <div class="totals">
+    <div class="row"><span>Subtotal</span><span>₹${(inv.subtotal || 0).toLocaleString()}</span></div>
+    <div class="row"><span>Tax (${inv.tax || 18}%)</span><span>+ ₹${((inv.subtotal || 0) * (Number(inv.tax || 18) / 100)).toLocaleString()}</span></div>
+    ${inv.discount ? `<div class="row"><span>Discount</span><span>- ₹${Number(inv.discount).toLocaleString()}</span></div>` : ""}
+    <div class="total-row"><span>Grand Total</span><span>${inv.amount}</span></div>
+  </div>
+  <div class="footer">Thank you for your business. Generated by AI Business Operations Copilot.</div>
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: "text/html;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `Invoice_${inv.id}.html`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function InvoicesPage() {
@@ -3516,7 +3994,7 @@ function InvoicesPage() {
     setLoading(true);
     try {
       if (!customersList || customersList.length === 0) {
-        alert("Cannot AI-generate invoice: Please register at least one customer first.");
+        setErrorMessage("Cannot AI-generate invoice: Please register at least one customer first.");
         setLoading(false);
         return;
       }
@@ -3524,7 +4002,7 @@ function InvoicesPage() {
       const availableProd = productsList.find(p => p.stock >= 2) || productsList[0];
 
       if (!availableProd || availableProd.stock < 1) {
-        alert("Cannot AI-generate invoice: No in-stock products available in inventory.");
+        setErrorMessage("Cannot AI-generate invoice: No in-stock products available in inventory.");
         setLoading(false);
         return;
       }
@@ -3546,10 +4024,11 @@ function InvoicesPage() {
       fetchInvoices();
       fetchDependencies();
       setPreview(generated);
-      alert(`AI Generated draft invoice ${generated.id} for ${firstCustomer} with 1 unit of ${availableProd.name}! Stock deducted.`);
+      setSuccessMessage(`AI Generated draft invoice ${generated.id} for ${firstCustomer} with 1 unit of ${availableProd.name}! Stock deducted.`);
+      setTimeout(() => setSuccessMessage(null), 5000);
     } catch (err: any) {
       console.error("AI Invoice Generation Error:", err);
-      alert(`AI Invoice Generation failed: ${err.message}`);
+      setErrorMessage(`AI Invoice Generation failed: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -3567,16 +4046,18 @@ function InvoicesPage() {
 
   const handleDeleteInvoice = async (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (confirm(`Delete invoice ${id}?`)) {
-      try {
-        await api.deleteInvoice(id);
-        fetchInvoices();
-        if (preview?.id === id) setPreview(null);
-      } catch (err) {
-        console.error("Delete invoice error:", err);
-      }
+    if (!window.confirm(`Are you sure you want to delete invoice ${id}?`)) return;
+    try {
+      await api.deleteInvoice(id);
+      fetchInvoices();
+      if (preview?.id === id) setPreview(null);
+    } catch (err) {
+      console.error("Delete invoice error:", err);
     }
   };
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const filtered = invoicesList.filter(inv =>
     inv.client.toLowerCase().includes(search.toLowerCase()) ||
@@ -3584,8 +4065,31 @@ function InvoicesPage() {
     inv.status.toLowerCase().includes(search.toLowerCase())
   );
 
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paginatedInvoices = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  const handleExportInvoicesCSV = () => {
+    const headers = ["Invoice ID", "Client", "Amount", "Issued Date", "Due Date", "Status", "Items"];
+    const rows = filtered.map(i => [i.id, `"${i.client}"`, `"${i.amount}"`, i.issued, i.due, i.status, `"${i.items || ''}"`]);
+    const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "invoices_ledger.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-5">
+      {successMessage && (
+        <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl text-xs flex items-center gap-2">
+          <CheckCircle size={14} className="shrink-0" />
+          <span>{successMessage}</span>
+        </div>
+      )}
+      <ErrorBanner message={errorMessage} onRetry={fetchInvoices} />
       {/* Global Success Banner */}
       {successMessage && (
         <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs px-4 py-3 rounded-xl flex items-center justify-between">
@@ -3616,7 +4120,8 @@ function InvoicesPage() {
         <div className="flex-1 bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
           <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-100">
             <h2 className="text-sm font-semibold text-slate-800 flex-1">Invoices ({filtered.length})</h2>
-            <SearchBar value={search} onChange={setSearch} placeholder="Search invoices..." />
+            <SearchBar value={search} onChange={(val) => { setSearch(val); setCurrentPage(1); }} placeholder="Search invoices..." />
+            <button onClick={handleExportInvoicesCSV} className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50"><Download size={13} />Export CSV</button>
             <button className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50"><Filter size={13} />Filter</button>
             <GradientButton size="sm" onClick={handleAIGenerate}><Sparkles size={13} />AI Generate</GradientButton>
             <GradientButton size="sm" variant="secondary" onClick={openCreateModal}><Plus size={13} />New Invoice</GradientButton>
@@ -3632,7 +4137,7 @@ function InvoicesPage() {
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {filtered.length > 0 ? (
-                  filtered.map(inv => (
+                  paginatedInvoices.map(inv => (
                     <tr key={inv.id} className="hover:bg-slate-50 cursor-pointer transition-colors" onClick={() => setPreview(preview?.id === inv.id ? null : inv)}>
                       <td className="px-5 py-3.5 text-sm font-mono font-medium text-indigo-600">{inv.id}</td>
                       <td className="px-5 py-3.5 text-sm text-slate-700">{inv.client}</td>
@@ -3643,7 +4148,7 @@ function InvoicesPage() {
                       <td className="px-5 py-3.5">
                         <div className="flex items-center gap-1">
                           <button onClick={(e) => { e.stopPropagation(); setPreview(inv); }} className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600" title="View"><Eye size={13} /></button>
-                          <button onClick={(e) => { e.stopPropagation(); alert(`Downloading PDF for ${inv.id}`); }} className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600" title="Download"><Download size={13} /></button>
+                          <button onClick={(e) => { e.stopPropagation(); downloadInvoicePDF(inv); }} className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600" title="Download PDF"><Download size={13} /></button>
                           <button onClick={(e) => handleDeleteInvoice(inv.id, e)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500" title="Delete"><Trash2 size={13} /></button>
                         </div>
                       </td>
@@ -3664,6 +4169,46 @@ function InvoicesPage() {
               </tbody>
             </table>
           </div>
+
+          {filtered.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3.5 border-t border-slate-100 bg-slate-50/50 text-xs text-slate-600">
+              <div className="flex items-center gap-2">
+                <span>Rows per page:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+                  className="border border-slate-200 rounded-lg px-2 py-1 bg-white text-xs outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value={5}>5</option>
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                </select>
+                <span className="text-slate-400 ml-2">
+                  Showing {filtered.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filtered.length)} of {filtered.length}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage <= 1}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors"
+                >
+                  Previous
+                </button>
+                <span className="px-2 font-medium text-slate-700">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage >= totalPages}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Invoice Preview Panel */}
@@ -3757,8 +4302,8 @@ function InvoicesPage() {
                 )}
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <button onClick={() => alert(`Downloaded PDF for ${preview.id}`)} className="flex items-center justify-center gap-1.5 text-xs py-2.5 bg-indigo-50 text-indigo-700 rounded-xl font-medium hover:bg-indigo-100"><Download size={12} />Download PDF</button>
-                <button onClick={() => alert(`Email sent to ${preview.client}`)} className="flex items-center justify-center gap-1.5 text-xs py-2.5 bg-violet-50 text-violet-700 rounded-xl font-medium hover:bg-violet-100"><Mail size={12} />Send Email</button>
+                <button onClick={() => downloadInvoicePDF(preview)} className="flex items-center justify-center gap-1.5 text-xs py-2.5 bg-indigo-50 text-indigo-700 rounded-xl font-medium hover:bg-indigo-100"><Download size={12} />Download PDF</button>
+                <button onClick={() => { window.location.href = `mailto:?subject=Invoice ${preview.id}&body=Dear ${preview.client},%0D%0A%0D%0APlease find details for invoice ${preview.id} in amount of ${preview.amount}. Due: ${preview.due}`; }} className="flex items-center justify-center gap-1.5 text-xs py-2.5 bg-violet-50 text-violet-700 rounded-xl font-medium hover:bg-violet-100"><Mail size={12} />Send Email</button>
               </div>
             </div>
           </div>
@@ -4002,6 +4547,11 @@ function EmployeesPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEmp, setEditingEmp] = useState<Employee | null>(null);
 
+  const [loading, setLoading] = useState(true);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
   // Form State
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
@@ -4012,7 +4562,15 @@ function EmployeesPage() {
   const [status, setStatus] = useState<"Active" | "On Leave" | "Inactive">("Active");
 
   const fetchEmployees = () => {
-    api.getEmployees().then(data => setEmployeesList(data)).catch(() => { });
+    setLoading(true);
+    setPageError(null);
+    api.getEmployees()
+      .then(data => setEmployeesList(data || []))
+      .catch(err => {
+        console.error("Error fetching employees:", err);
+        setPageError(err?.message || "Failed to load employees from backend.");
+      })
+      .finally(() => setLoading(false));
   };
 
   useEffect(() => {
@@ -4028,6 +4586,7 @@ function EmployeesPage() {
     setAttendance(95);
     setPerformance(90);
     setStatus("Active");
+    setFormError(null);
     setIsModalOpen(true);
   };
 
@@ -4041,24 +4600,30 @@ function EmployeesPage() {
     setAttendance(emp.attendance);
     setPerformance(emp.performance);
     setStatus(emp.status);
+    setFormError(null);
     setIsModalOpen(true);
   };
 
   const handleDeleteEmployee = async (id: number, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (confirm("Are you sure you want to delete this employee record?")) {
-      try {
-        await api.deleteEmployee(id);
-        fetchEmployees();
-        if (selected?.id === id) setSelected(null);
-      } catch (err) {
-        console.error("Delete employee error:", err);
-      }
+    if (!window.confirm("Are you sure you want to delete this employee record?")) return;
+    try {
+      await api.deleteEmployee(id);
+      fetchEmployees();
+      if (selected?.id === id) setSelected(null);
+    } catch (err) {
+      console.error("Delete employee error:", err);
     }
   };
 
   const handleSaveEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!name.trim() || !role.trim() || !dept.trim()) {
+      setFormError("Please fill in all required fields (Name, Role, and Department).");
+      return;
+    }
+    setFormError(null);
+    setIsSaving(true);
     try {
       if (editingEmp) {
         await api.updateEmployee(editingEmp.id, { name, role, dept, salary, attendance, performance, status });
@@ -4067,8 +4632,10 @@ function EmployeesPage() {
       }
       setIsModalOpen(false);
       fetchEmployees();
-    } catch (err) {
-      console.error("Save employee error:", err);
+    } catch (err: any) {
+      setFormError(err?.message || "Failed to save employee record.");
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -4080,6 +4647,8 @@ function EmployeesPage() {
 
   return (
     <div className="space-y-5">
+      <ErrorBanner message={pageError} onRetry={fetchEmployees} />
+
       <div className="grid grid-cols-4 gap-4">
         {[
           { title: "Total Employees", value: `${employeesList.length}`, change: "+2", icon: Users, color: "bg-indigo-500" },
@@ -4095,8 +4664,13 @@ function EmployeesPage() {
           <button className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50"><Filter size={13} />Filter</button>
           <GradientButton size="sm" onClick={openAddModal}><Plus size={13} />Add Employee</GradientButton>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full">
+        {loading ? (
+          <div className="p-4">
+            <SkeletonTable rows={5} />
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
             <thead>
               <tr className="border-b border-slate-50">
                 {["Employee", "Role", "Department", "Salary", "Attendance", "Performance", "Status", "Actions"].map(h => (
@@ -4163,7 +4737,8 @@ function EmployeesPage() {
             </tbody>
           </table>
         </div>
-      </div>
+      )}
+    </div>
 
       {/* Payroll summary & Dynamic AI HR Insights */}
       {(() => {
@@ -4257,6 +4832,12 @@ function EmployeesPage() {
               <h3 className="text-sm font-bold text-slate-800">{editingEmp ? "Edit Employee" : "Add New Employee"}</h3>
               <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
             </div>
+            {formError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs flex items-center gap-2">
+                <AlertTriangle size={14} className="shrink-0" />
+                <span>{formError}</span>
+              </div>
+            )}
             <form onSubmit={handleSaveEmployee} className="space-y-3 text-xs">
               <div>
                 <label className="block font-medium text-slate-700 mb-1">Employee Full Name *</label>
@@ -4304,7 +4885,10 @@ function EmployeesPage() {
               </div>
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 rounded-xl text-slate-600 bg-slate-100 hover:bg-slate-200 font-medium">Cancel</button>
-                <GradientButton size="sm"><CheckCircle size={13} />{editingEmp ? "Save Employee" : "Add Employee"}</GradientButton>
+                <GradientButton size="sm" disabled={isSaving}>
+                  {isSaving ? <RefreshCw size={13} className="animate-spin" /> : <CheckCircle size={13} />}
+                  {isSaving ? "Saving..." : (editingEmp ? "Save Employee" : "Add Employee")}
+                </GradientButton>
               </div>
             </form>
           </div>
@@ -4811,59 +5395,115 @@ function ProfitAnalyzerPage({ user }: { user?: UserSession | null }) {
 function NotificationsPage() {
   const [filter, setFilter] = useState("All");
   const [items, setItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const loadNotifications = () => {
+    setLoading(true);
     api.getNotifications()
       .then(data => setItems(data || []))
-      .catch(() => setItems([]));
+      .catch(() => setItems([]))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadNotifications();
   }, []);
+
+  const handleDismiss = async (e: React.MouseEvent, id: number) => {
+    e.stopPropagation();
+    try {
+      await api.deleteNotification(id);
+      setItems(prev => prev.filter(i => i.id !== id));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleClearAll = async () => {
+    if (!window.confirm("Are you sure you want to clear all notifications?")) return;
+    try {
+      await api.clearAllNotifications();
+      setItems([]);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const typeIcon: Record<string, any> = { ai: Bot, inventory: Package, payment: CreditCard, customer: Users, revenue: TrendingUp, employee: UserCheck };
   const typeColor: Record<string, string> = { ai: "bg-indigo-100 text-indigo-600", inventory: "bg-amber-100 text-amber-600", payment: "bg-red-100 text-red-600", customer: "bg-violet-100 text-violet-600", revenue: "bg-emerald-100 text-emerald-600", employee: "bg-blue-100 text-blue-600" };
   const filters = ["All", "AI", "Inventory", "Customer", "Payment", "Revenue", "Employee"];
   const filtered = filter === "All" ? items : items.filter(n => n.type === filter.toLowerCase());
+
   return (
     <div className="max-w-3xl space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           {filters.map(f => (
             <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-colors ${filter === f ? "bg-indigo-500 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>{f}</button>
           ))}
         </div>
-        <button onClick={async () => {
-          try {
-            await api.markAllNotificationsRead();
-            setItems(items.map(i => ({ ...i, read: true })));
-          } catch {}
-        }} className="text-xs text-indigo-600 hover:text-indigo-700 font-medium">
-          Mark all read
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={async () => {
+            try {
+              await api.markAllNotificationsRead();
+              setItems(items.map(i => ({ ...i, read: true })));
+            } catch {}
+          }} className="text-xs text-indigo-600 hover:text-indigo-700 font-medium">
+            Mark all read
+          </button>
+          {items.length > 0 && (
+            <button onClick={handleClearAll} className="text-xs text-rose-600 hover:text-rose-700 font-medium">
+              Clear all
+            </button>
+          )}
+        </div>
       </div>
       <div className="space-y-3">
-        {filtered.map(n => {
-          const Icon = typeIcon[n.type] || Bell;
-          return (
-            <div key={n.id} onClick={async () => {
-              try {
-                await api.markNotificationRead(n.id);
-                setItems(items.map(i => i.id === n.id ? { ...i, read: true } : i));
-              } catch {}
-            }} className={`bg-white rounded-2xl p-4 border shadow-sm cursor-pointer hover:shadow-md transition-all ${n.read ? "border-slate-100" : "border-indigo-100 shadow-indigo-50"}`}>
-              <div className="flex items-start gap-4">
-                <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${typeColor[n.type]}`}>
-                  <Icon size={16} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2 mb-1">
-                    <p className={`text-sm font-semibold ${n.read ? "text-slate-600" : "text-slate-900"}`}>{n.title}</p>
-                    <span className="text-xs text-slate-400 shrink-0">{n.time}</span>
+        {loading ? (
+          <div className="text-center py-12 text-slate-400">
+            <RefreshCw size={24} className="animate-spin mx-auto mb-2 text-indigo-500" />
+            <p className="text-xs">Loading notifications...</p>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="text-center py-12 bg-white rounded-2xl border border-slate-100 p-8 shadow-sm">
+            <Bell size={32} className="mx-auto mb-2 text-slate-300" />
+            <p className="text-sm font-semibold text-slate-700">No notifications</p>
+            <p className="text-xs text-slate-400 mt-1">You're all caught up with business alerts.</p>
+          </div>
+        ) : (
+          filtered.map(n => {
+            const Icon = typeIcon[n.type] || Bell;
+            return (
+              <div key={n.id} onClick={async () => {
+                try {
+                  await api.markNotificationRead(n.id);
+                  setItems(items.map(i => i.id === n.id ? { ...i, read: true } : i));
+                } catch {}
+              }} className={`bg-white rounded-2xl p-4 border shadow-sm cursor-pointer hover:shadow-md transition-all relative group ${n.read ? "border-slate-100" : "border-indigo-100 shadow-indigo-50"}`}>
+                <div className="flex items-start gap-4">
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${typeColor[n.type]}`}>
+                    <Icon size={16} />
                   </div>
-                  <p className="text-xs text-slate-500 leading-relaxed">{n.desc}</p>
+                  <div className="flex-1 min-w-0 pr-6">
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <p className={`text-sm font-semibold ${n.read ? "text-slate-600" : "text-slate-900"}`}>{n.title}</p>
+                      <span className="text-xs text-slate-400 shrink-0">{n.time}</span>
+                    </div>
+                    <p className="text-xs text-slate-500 leading-relaxed">{n.desc}</p>
+                  </div>
+                  {!n.read && <div className="w-2 h-2 rounded-full bg-indigo-500 shrink-0 mt-1" />}
+                  <button
+                    onClick={(e) => handleDismiss(e, n.id)}
+                    className="p-1 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 transition-colors ml-1"
+                    title="Dismiss notification"
+                  >
+                    <X size={14} />
+                  </button>
                 </div>
-                {!n.read && <div className="w-2 h-2 rounded-full bg-indigo-500 shrink-0 mt-1" />}
               </div>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
       </div>
     </div>
   );
@@ -4890,6 +5530,18 @@ function ToggleRow({ label, desc, enabled }: { label: string; desc: string; enab
 
 function SettingsPage({ user }: { user?: UserSession | null }) {
   const [activeSection, setActiveSection] = useState("Company Profile");
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleSaveCompany = () => {
+    setIsSaving(true);
+    setTimeout(() => {
+      setIsSaving(false);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    }, 400);
+  };
+
   const sections = [
     "Company Profile", "Users & Roles", "Security", "API Keys",
     "AI Preferences", "Notifications", "Billing", "Integrations", "Appearance"
@@ -4928,7 +5580,15 @@ function SettingsPage({ user }: { user?: UserSession | null }) {
                 <input defaultValue={value} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300" />
               </div>
             ))}
-            <GradientButton onClick={() => alert("Company settings saved successfully!")}><CheckCircle size={14} />Save Changes</GradientButton>
+            {saveSuccess && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl text-xs flex items-center gap-2">
+                <CheckCircle size={14} /> Company settings saved successfully!
+              </div>
+            )}
+            <GradientButton onClick={handleSaveCompany} disabled={isSaving}>
+              {isSaving ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle size={14} />}
+              {isSaving ? "Saving Changes..." : "Save Changes"}
+            </GradientButton>
           </div>
         )}
         {activeSection === "Security" && (
@@ -5293,6 +5953,7 @@ export default function App() {
     try {
       localStorage.removeItem("bizops_active_page");
       localStorage.removeItem("bizops_user");
+      localStorage.removeItem("bizops_session_token");
     } catch { }
     setPage("login");
   };
@@ -5307,7 +5968,7 @@ export default function App() {
           </div>
           <p className="text-slate-400 text-sm font-medium flex items-center justify-center gap-2">
             <Loader2 size={16} className="animate-spin text-indigo-400" />
-            Verifying secure session...
+            Loading AI Business Operations Copilot...
           </p>
         </div>
       </div>
@@ -5378,6 +6039,11 @@ export default function App() {
         {page === "pricing" && <PricingPage />}
         {page === "design-system" && <DesignSystemPage />}
         {page === "profit" && <ProfitAnalyzerPage user={currentUser} />}
+        {![
+          "dashboard", "business-health", "action-center", "copilot", "customers",
+          "sales", "inventory", "invoices", "employees", "reports", "notifications",
+          "settings", "profile", "pricing", "design-system", "profit"
+        ].includes(page) && <NotFoundPage onNavigateHome={() => handlePageChange("dashboard")} />}
       </AppLayout>
     </>
   );

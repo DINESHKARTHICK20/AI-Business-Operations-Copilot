@@ -1522,52 +1522,64 @@ def get_customers(user: dict = Depends(get_authenticated_user)):
 
 @app.post("/api/customers")
 def create_customer(customer: CustomerCreate, user: dict = Depends(get_authenticated_user)):
+    if not customer.name or not customer.name.strip():
+        raise HTTPException(status_code=400, detail="Customer name is required.")
+    if not customer.email or not customer.email.strip() or "@" not in customer.email:
+        raise HTTPException(status_code=400, detail="A valid customer email address is required.")
+    if not customer.company or not customer.company.strip():
+        raise HTTPException(status_code=400, detail="Customer company name is required.")
+
     conn = get_db()
     cursor = conn.cursor()
-    joined_date = customer.joined or datetime.now().strftime("%b %Y")
-
-    # Calculate churn score from model
-    churn_prob = 0
     try:
-        model = churn_bundle["model"]
-        features = churn_bundle["features"]
-        avg_val = customer.average_order_value or (customer.total_spend / max(1, customer.orders))
-        input_data = pd.DataFrame(
-            [[
-                customer.orders,
-                customer.total_spend,
-                customer.days_since_last_purchase,
-                customer.support_tickets,
-                customer.complaints,
-                avg_val
-            ]],
-            columns=features
+        joined_date = customer.joined or datetime.now().strftime("%b %Y")
+
+        # Calculate churn score from model
+        churn_prob = 0
+        try:
+            model = churn_bundle["model"]
+            features = churn_bundle["features"]
+            avg_val = customer.average_order_value or (customer.total_spend / max(1, customer.orders))
+            input_data = pd.DataFrame(
+                [[
+                    customer.orders,
+                    customer.total_spend,
+                    customer.days_since_last_purchase,
+                    customer.support_tickets,
+                    customer.complaints,
+                    avg_val
+                ]],
+                columns=features
+            )
+            churn_prob = round(float(model.predict_proba(input_data)[0][1]) * 100)
+        except Exception:
+            churn_prob = 15
+
+        cursor.execute("""
+        INSERT INTO customers (
+            user_id, name, email, company, status, ltv, total_spend, orders, joined,
+            churn, days_since_last_purchase, support_tickets, complaints, average_order_value
         )
-        churn_prob = round(float(model.predict_proba(input_data)[0][1]) * 100)
-    except Exception:
-        churn_prob = 15
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user["id"], customer.name, customer.email, customer.company, customer.status,
+            customer.ltv, customer.total_spend, customer.orders, joined_date,
+            churn_prob, customer.days_since_last_purchase, customer.support_tickets,
+            customer.complaints, customer.average_order_value or 0.0
+        ))
+        new_id = cursor.lastrowid
 
-    cursor.execute("""
-    INSERT INTO customers (
-        user_id, name, email, company, status, ltv, total_spend, orders, joined,
-        churn, days_since_last_purchase, support_tickets, complaints, average_order_value
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        user["id"], customer.name, customer.email, customer.company, customer.status,
-        customer.ltv, customer.total_spend, customer.orders, joined_date,
-        churn_prob, customer.days_since_last_purchase, customer.support_tickets,
-        customer.complaints, customer.average_order_value or 0.0
-    ))
-    new_id = cursor.lastrowid
+        log_activity(conn, user["id"], "Users", f"Added customer: {customer.name} ({customer.company})", "customer", "text-blue-500")
 
-    log_activity(conn, user["id"], "Users", f"Added customer: {customer.name} ({customer.company})", "customer", "text-blue-500")
-
-    conn.commit()
-    cursor.execute("SELECT * FROM customers WHERE id = ? AND user_id = ?", (new_id, user["id"]))
-    created = dict(cursor.fetchone())
-    conn.close()
-    return created
+        conn.commit()
+        cursor.execute("SELECT * FROM customers WHERE id = ? AND user_id = ?", (new_id, user["id"]))
+        created = dict(cursor.fetchone())
+        return created
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.put("/api/customers/{customer_id}")
@@ -1748,23 +1760,36 @@ def get_employees(user: dict = Depends(get_authenticated_user)):
 
 @app.post("/api/employees")
 def create_employee(emp: EmployeeCreate, user: dict = Depends(get_authenticated_user)):
+    if not emp.name or not emp.name.strip():
+        raise HTTPException(status_code=400, detail="Employee name is required.")
+    if not emp.role or not emp.role.strip():
+        raise HTTPException(status_code=400, detail="Employee role is required.")
+    if emp.attendance is not None and (emp.attendance < 0 or emp.attendance > 100):
+        raise HTTPException(status_code=400, detail="Attendance must be between 0 and 100%.")
+    if emp.performance is not None and (emp.performance < 0 or emp.performance > 100):
+        raise HTTPException(status_code=400, detail="Performance must be between 0 and 100%.")
     conn = get_db()
     cursor = conn.cursor()
-    joined_date = emp.joined or datetime.now().strftime("%b %Y")
-    cursor.execute("""
-    INSERT INTO employees (user_id, name, role, dept, salary, status, attendance, performance, joined)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        user["id"], emp.name, emp.role, emp.dept, emp.salary, emp.status,
-        emp.attendance, emp.performance, joined_date
-    ))
-    new_id = cursor.lastrowid
-    log_activity(conn, user["id"], "UserCheck", f"Onboarded employee: {emp.name} ({emp.role})", "employee", "text-purple-500")
-    conn.commit()
-    cursor.execute("SELECT * FROM employees WHERE id = ? AND user_id = ?", (new_id, user["id"]))
-    created = dict(cursor.fetchone())
-    conn.close()
-    return created
+    try:
+        joined_date = emp.joined or datetime.now().strftime("%b %Y")
+        cursor.execute("""
+        INSERT INTO employees (user_id, name, role, dept, salary, status, attendance, performance, joined)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user["id"], emp.name, emp.role, emp.dept, emp.salary, emp.status,
+            emp.attendance, emp.performance, joined_date
+        ))
+        new_id = cursor.lastrowid
+        log_activity(conn, user["id"], "UserCheck", f"Onboarded employee: {emp.name} ({emp.role})", "employee", "text-purple-500")
+        conn.commit()
+        cursor.execute("SELECT * FROM employees WHERE id = ? AND user_id = ?", (new_id, user["id"]))
+        created = dict(cursor.fetchone())
+        return created
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.put("/api/employees/{emp_id}")
@@ -1836,32 +1861,51 @@ def get_inventory(user: dict = Depends(get_authenticated_user)):
 
 @app.post("/api/inventory")
 def create_product(prod: ProductCreate, user: dict = Depends(get_authenticated_user)):
+    if not prod.name or not prod.name.strip():
+        raise HTTPException(status_code=400, detail="Product name is required.")
+    if not prod.sku or not prod.sku.strip():
+        raise HTTPException(status_code=400, detail="Product SKU is required.")
+    if prod.stock < 0:
+        raise HTTPException(status_code=400, detail="Product stock cannot be negative.")
+    if prod.reorder < 0:
+        raise HTTPException(status_code=400, detail="Product reorder level cannot be negative.")
+
+    clean_sku = prod.sku.strip()
     conn = get_db()
     cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id FROM products WHERE LOWER(sku) = LOWER(?)", (clean_sku,))
+        if cursor.fetchone():
+            raise HTTPException(status_code=400, detail=f"A product with SKU '{clean_sku}' already exists.")
 
-    cursor.execute("SELECT id FROM products WHERE sku = ? AND user_id = ?", (prod.sku.strip(), user["id"]))
-    if cursor.fetchone():
-        conn.close()
-        raise HTTPException(status_code=400, detail=f"A product with SKU '{prod.sku}' already exists in your inventory.")
-
-    cursor.execute("""
-    INSERT INTO products (
-        user_id, name, sku, category, stock, reorder, price, price_num,
-        status, trend, avg_daily_demand, trend_factor, promotion_factor
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        user["id"], prod.name, prod.sku.strip(), prod.category, prod.stock, prod.reorder,
-        prod.price, prod.price_num, prod.status, prod.trend,
-        prod.avg_daily_demand, prod.trend_factor, prod.promotion_factor
-    ))
-    new_id = cursor.lastrowid
-    log_activity(conn, user["id"], "Package", f"Cataloged product: {prod.name} ({prod.sku})", "inventory", "text-emerald-500")
-    conn.commit()
-    cursor.execute("SELECT * FROM products WHERE id = ? AND user_id = ?", (new_id, user["id"]))
-    created = dict(cursor.fetchone())
-    conn.close()
-    return created
+        cursor.execute("""
+        INSERT INTO products (
+            user_id, name, sku, category, stock, reorder, price, price_num,
+            status, trend, avg_daily_demand, trend_factor, promotion_factor
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user["id"], prod.name.strip(), clean_sku, prod.category, prod.stock, prod.reorder,
+            prod.price, prod.price_num, prod.status, prod.trend,
+            prod.avg_daily_demand, prod.trend_factor, prod.promotion_factor
+        ))
+        new_id = cursor.lastrowid
+        log_activity(conn, user["id"], "Package", f"Cataloged product: {prod.name} ({clean_sku})", "inventory", "text-emerald-500")
+        conn.commit()
+        cursor.execute("SELECT * FROM products WHERE id = ? AND user_id = ?", (new_id, user["id"]))
+        created = dict(cursor.fetchone())
+        return created
+    except sqlite3.IntegrityError:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail=f"A product with SKU '{clean_sku}' already exists.")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.put("/api/inventory/{product_id}")
@@ -2374,6 +2418,36 @@ def mark_notification_read(notif_id: int, user: dict = Depends(get_authenticated
         cursor.execute("UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?", (notif_id, user["id"]))
         conn.commit()
         return {"status": "success", "id": notif_id}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@app.delete("/api/notifications/{notif_id}")
+def delete_notification(notif_id: int, user: dict = Depends(get_authenticated_user)):
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM notifications WHERE id = ? AND user_id = ?", (notif_id, user["id"]))
+        conn.commit()
+        return {"status": "success", "deleted_id": notif_id}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@app.delete("/api/notifications")
+def clear_all_notifications(user: dict = Depends(get_authenticated_user)):
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM notifications WHERE user_id = ?", (user["id"],))
+        conn.commit()
+        return {"status": "success", "message": "All notifications cleared."}
     finally:
         try:
             conn.close()
