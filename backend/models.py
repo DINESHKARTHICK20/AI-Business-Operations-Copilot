@@ -1,0 +1,285 @@
+"""
+SQLAlchemy 2.0 Declarative Models
+AI Business Operations Copilot - Production Architecture
+
+Includes complete multi-tenant tenant isolation, strict ON DELETE rules for financial records,
+and the non-destructive legacy_orphans_archive table.
+"""
+
+from datetime import datetime
+from decimal import Decimal
+from typing import List, Optional
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from backend.database import Base
+
+
+# ============================================================
+# 1. USERS TABLE (ROOT AUTHENTICATION DIRECTORY)
+# ============================================================
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    password: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    company: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    biz_type: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+
+    # Relationships
+    sessions: Mapped[List["UserSession"]] = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
+    customers: Mapped[List["Customer"]] = relationship("Customer", back_populates="user", cascade="all, delete-orphan")
+    products: Mapped[List["Product"]] = relationship("Product", back_populates="user", cascade="all, delete-orphan")
+    invoices: Mapped[List["Invoice"]] = relationship("Invoice", back_populates="user")
+    employees: Mapped[List["Employee"]] = relationship("Employee", back_populates="user", cascade="all, delete-orphan")
+    activities: Mapped[List["BusinessActivity"]] = relationship("BusinessActivity", back_populates="user", cascade="all, delete-orphan")
+    notifications: Mapped[List["Notification"]] = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+    profit_products: Mapped[List["ProfitProduct"]] = relationship("ProfitProduct", back_populates="user", cascade="all, delete-orphan")
+    expenses: Mapped[List["Expense"]] = relationship("Expense", back_populates="user", cascade="all, delete-orphan")
+
+
+# ============================================================
+# 2. USER SESSIONS (SEC-02 HTTPONLY AUTH)
+# ============================================================
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    token: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_activity: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    csrf_token: Mapped[str] = mapped_column(String(128), default="", server_default="")
+
+    user: Mapped["User"] = relationship("User", back_populates="sessions")
+
+
+# ============================================================
+# 3. CUSTOMERS TABLE
+# ============================================================
+class Customer(Base):
+    __tablename__ = "customers"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    company: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    status: Mapped[str] = mapped_column(String(50), default="Active", server_default="Active")
+    ltv: Mapped[str] = mapped_column(String(100), default="₹0", server_default="₹0")
+    total_spend: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default="0.00")
+    orders: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    joined: Mapped[str] = mapped_column(String(50), default="", server_default="")
+    churn: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    days_since_last_purchase: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    support_tickets: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    complaints: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    average_order_value: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default="0.00")
+
+    user: Mapped["User"] = relationship("User", back_populates="customers")
+    invoices: Mapped[List["Invoice"]] = relationship("Invoice", back_populates="customer")
+
+
+# ============================================================
+# 4. PRODUCTS TABLE (MULTI-TENANT COMPOSITE SKU)
+# ============================================================
+class Product(Base):
+    __tablename__ = "products"
+    __table_args__ = (
+        UniqueConstraint("user_id", "sku", name="uq_products_user_sku"),
+        Index("idx_products_user_sku", "user_id", "sku"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    sku: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(100), default="General", server_default="General")
+    stock: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    reorder: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    price: Mapped[str] = mapped_column(String(50), default="$0.00", server_default="$0.00")
+    price_num: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default="0.00")
+    status: Mapped[str] = mapped_column(String(50), default="In Stock", server_default="In Stock")
+    trend: Mapped[str] = mapped_column(String(50), default="Stable", server_default="Stable")
+    avg_daily_demand: Mapped[float] = mapped_column(Float, default=0.0, server_default="0.0")
+    trend_factor: Mapped[float] = mapped_column(Float, default=1.0, server_default="1.0")
+    promotion_factor: Mapped[float] = mapped_column(Float, default=1.0, server_default="1.0")
+
+    user: Mapped["User"] = relationship("User", back_populates="products")
+    invoice_items: Mapped[List["InvoiceItem"]] = relationship("InvoiceItem", back_populates="product")
+
+
+# ============================================================
+# 5. INVOICES TABLE (FINANCIAL RETENTION RESTRICT)
+# ============================================================
+class Invoice(Base):
+    __tablename__ = "invoices"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    # ON DELETE RESTRICT guarantees invoices cannot be deleted via cascading user/customer deletes
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    customer_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("customers.id", ondelete="RESTRICT"), nullable=True, index=True)
+    client: Mapped[str] = mapped_column(String(255), nullable=False)
+    amount: Mapped[str] = mapped_column(String(50), default="$0.00", server_default="$0.00")
+    amount_num: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default="0.00")
+    due: Mapped[str] = mapped_column(String(50), default="", server_default="")
+    issued: Mapped[str] = mapped_column(String(50), default="", server_default="")
+    status: Mapped[str] = mapped_column(String(50), default="Pending", server_default="Pending")
+    items: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    subtotal: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default="0.00")
+    tax: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default="0.00")
+    discount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default="0.00")
+    total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default="0.00")
+
+    user: Mapped["User"] = relationship("User", back_populates="invoices")
+    customer: Mapped[Optional["Customer"]] = relationship("Customer", back_populates="invoices")
+    line_items: Mapped[List["InvoiceItem"]] = relationship("InvoiceItem", back_populates="invoice", cascade="all, delete-orphan")
+
+
+# ============================================================
+# 6. INVOICE ITEMS (IMMUTABLE SNAPSHOT ON DELETE SET NULL)
+# ============================================================
+class InvoiceItem(Base):
+    __tablename__ = "invoice_items"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    invoice_id: Mapped[str] = mapped_column(String(128), ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False, index=True)
+    # SET NULL preserves line item records when product catalog item is deleted
+    product_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("products.id", ondelete="SET NULL"), nullable=True, index=True)
+    product_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default="0.00")
+    line_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default="0.00")
+
+    invoice: Mapped["Invoice"] = relationship("Invoice", back_populates="line_items")
+    product: Mapped[Optional["Product"]] = relationship("Product", back_populates="invoice_items")
+
+
+# ============================================================
+# 7. EMPLOYEES TABLE
+# ============================================================
+class Employee(Base):
+    __tablename__ = "employees"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    dept: Mapped[str] = mapped_column(String(100), default="General", server_default="General")
+    salary: Mapped[str] = mapped_column(String(100), default="₹0", server_default="₹0")
+    status: Mapped[str] = mapped_column(String(50), default="Active", server_default="Active")
+    attendance: Mapped[float] = mapped_column(Float, default=100.0, server_default="100.0")
+    performance: Mapped[float] = mapped_column(Float, default=5.0, server_default="5.0")
+    joined: Mapped[str] = mapped_column(String(50), default="", server_default="")
+
+    user: Mapped["User"] = relationship("User", back_populates="employees")
+
+
+# ============================================================
+# 8. BUSINESS ACTIVITIES TABLE
+# ============================================================
+class BusinessActivity(Base):
+    __tablename__ = "business_activities"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    icon: Mapped[str] = mapped_column(String(100), default="Activity", server_default="Activity")
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(100), default="system", server_default="system")
+    color: Mapped[str] = mapped_column(String(50), default="#4f46e5", server_default="#4f46e5")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user: Mapped["User"] = relationship("User", back_populates="activities")
+
+
+# ============================================================
+# 9. NOTIFICATIONS TABLE
+# ============================================================
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    type: Mapped[str] = mapped_column(String(100), default="info", server_default="info")
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    desc: Mapped[str] = mapped_column(Text, default="", server_default="")
+    read: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user: Mapped["User"] = relationship("User", back_populates="notifications")
+
+
+# ============================================================
+# 10. PROFIT PRODUCTS TABLE
+# ============================================================
+class ProfitProduct(Base):
+    __tablename__ = "profit_products"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    category: Mapped[str] = mapped_column(String(100), default="General", server_default="General")
+    buy: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default="0.00")
+    sell: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default="0.00")
+    qty: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+    user: Mapped["User"] = relationship("User", back_populates="profit_products")
+
+
+# ============================================================
+# 11. EXPENSES TABLE
+# ============================================================
+class Expense(Base):
+    __tablename__ = "expenses"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(100), default="Operating", server_default="Operating")
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default="0.00")
+    description: Mapped[str] = mapped_column(Text, default="", server_default="")
+    date: Mapped[str] = mapped_column(String(50), default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user: Mapped["User"] = relationship("User", back_populates="expenses")
+
+
+# ============================================================
+# 12. LEGACY ORPHANS ARCHIVE (STAGING AUDIT TABLE)
+# ============================================================
+class LegacyOrphansArchive(Base):
+    __tablename__ = "legacy_orphans_archive"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    source_table: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    source_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    original_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    record_payload: Mapped[str] = mapped_column(Text, nullable=False)
+    archived_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    archive_reason: Mapped[str] = mapped_column(Text, default="Historical orphan record from deleted test user account", server_default="Historical orphan record from deleted test user account")
