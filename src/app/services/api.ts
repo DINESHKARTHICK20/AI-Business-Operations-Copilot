@@ -311,6 +311,23 @@ export interface AuthResponse {
 
 // ─── Generic HTTP Request Handler ─────────────────────────────────────────────
 
+// Automatically purge legacy session tokens from browser localStorage on script evaluation
+if (typeof localStorage !== "undefined") {
+  try {
+    localStorage.removeItem("bizops_session_token");
+  } catch {}
+}
+
+let inMemoryCsrfToken: string | null = null;
+
+export function setCsrfToken(token: string) {
+  inMemoryCsrfToken = token;
+}
+
+export function getStoredCsrfToken(): string | null {
+  return inMemoryCsrfToken || getCookie("csrf_token");
+}
+
 function getCookie(name: string): string | null {
   if (typeof document === "undefined") return null;
   const match = document.cookie.match(new RegExp(`(^|;\\s*)(${name})=([^;]*)`));
@@ -321,13 +338,11 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   const baseUrl = getBaseApiUrl();
   const primaryUrl = `${baseUrl}${endpoint}`;
   const method = (options.method || "GET").toUpperCase();
-  const csrfToken = getCookie("csrf_token");
-  const storedToken = typeof localStorage !== "undefined" ? localStorage.getItem("bizops_session_token") : null;
+  const csrfToken = inMemoryCsrfToken || getCookie("csrf_token");
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(csrfToken && ["POST", "PUT", "PATCH", "DELETE"].includes(method) ? { "X-CSRF-Token": csrfToken } : {}),
-    ...(storedToken && !((options.headers as Record<string, string>)?.["Authorization"]) ? { "Authorization": `Bearer ${storedToken}` } : {}),
     ...((options.headers as Record<string, string>) || {}),
   };
 
@@ -393,16 +408,21 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
         : `HTTP Error ${res.status}: ${res.statusText}`);
     throw new Error(errMsg);
   }
-  return await res.json();
+  const data = await res.json();
+  if (data && typeof data === "object" && data.csrf_token) {
+    inMemoryCsrfToken = data.csrf_token;
+  }
+  return data;
 }
 
 async function requestBlob(endpoint: string, options: RequestInit = {}): Promise<Blob> {
   const baseUrl = getBaseApiUrl();
   const primaryUrl = `${baseUrl}${endpoint}`;
-  const storedToken = typeof localStorage !== "undefined" ? localStorage.getItem("bizops_session_token") : null;
+  const method = (options.method || "GET").toUpperCase();
+  const csrfToken = inMemoryCsrfToken || getCookie("csrf_token");
 
   const headers: Record<string, string> = {
-    ...(storedToken && !((options.headers as Record<string, string>)?.["Authorization"]) ? { "Authorization": `Bearer ${storedToken}` } : {}),
+    ...(csrfToken && ["POST", "PUT", "PATCH", "DELETE"].includes(method) ? { "X-CSRF-Token": csrfToken } : {}),
     ...((options.headers as Record<string, string>) || {}),
   };
 
@@ -707,9 +727,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     });
-    if (res?.token && typeof localStorage !== "undefined") {
+    // Session is maintained strictly via HttpOnly cookie; ensure no session tokens exist in localStorage
+    if (typeof localStorage !== "undefined") {
       try {
-        localStorage.setItem("bizops_session_token", res.token);
+        localStorage.removeItem("bizops_session_token");
       } catch {}
     }
     return res;
@@ -745,14 +766,16 @@ export const api = {
 
   async logoutUser(): Promise<{ status: string; message?: string }> {
     try {
+      return await request<{ status: string; message?: string }>("/api/auth/logout", {
+        method: "POST",
+      });
+    } finally {
       if (typeof localStorage !== "undefined") {
         localStorage.removeItem("bizops_session_token");
         localStorage.removeItem("bizops_user");
       }
-    } catch {}
-    return request<{ status: string; message?: string }>("/api/auth/logout", {
-      method: "POST",
-    });
+      inMemoryCsrfToken = null;
+    }
   },
 
   async logout(): Promise<{ status: string; message?: string }> {

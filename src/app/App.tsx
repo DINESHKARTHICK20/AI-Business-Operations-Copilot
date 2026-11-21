@@ -991,6 +991,7 @@ function LoginPage({
     setCheckingServer(true);
     try {
       const res = await api.checkHealth();
+      api.getCsrfToken().catch(() => {});
       if (res && res.status === "healthy") {
         setServerStatus("online");
         if (isConnectionError) {
@@ -6034,7 +6035,7 @@ export default function App() {
     return "landing";
   });
 
-  // Verify backend session on mount via HttpOnly cookie and/or Bearer header
+  // Verify backend session on mount via HttpOnly cookie
   useEffect(() => {
     let isMounted = true;
     api.getCurrentUser()
@@ -6063,8 +6064,17 @@ export default function App() {
         }
       });
 
+    // Handle expired or revoked sessions immediately across all app views
+    const handleUnauthorized = () => {
+      setCurrentUser(null);
+      setLoginNotice("Your session has expired. Please sign in again.");
+      setPage("login");
+    };
+    window.addEventListener("bizops_unauthorized", handleUnauthorized);
+
     return () => {
       isMounted = false;
+      window.removeEventListener("bizops_unauthorized", handleUnauthorized);
     };
   }, []);
 

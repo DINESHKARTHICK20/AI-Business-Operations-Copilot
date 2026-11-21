@@ -48,8 +48,9 @@ logger = logging.getLogger("bizops.auth")
 # ============================================================
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "bizops_prod_secret_key_change_in_production_2026")
-ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
-SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true" or ENVIRONMENT == "production"
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").strip().lower()
+IS_PRODUCTION = ENVIRONMENT == "production"
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true" or IS_PRODUCTION
 
 _env_origins = os.environ.get("ALLOWED_ORIGINS", "")
 if _env_origins:
@@ -345,6 +346,7 @@ def init_db():
         expires_at TEXT NOT NULL,
         last_activity TEXT NOT NULL DEFAULT '',
         revoked_at TEXT DEFAULT NULL,
+        csrf_token TEXT DEFAULT '',
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     """)
@@ -354,6 +356,8 @@ def init_db():
         cursor.execute("ALTER TABLE user_sessions ADD COLUMN last_activity TEXT DEFAULT ''")
     if "revoked_at" not in sess_cols and len(sess_cols) > 0:
         cursor.execute("ALTER TABLE user_sessions ADD COLUMN revoked_at TEXT DEFAULT NULL")
+    if "csrf_token" not in sess_cols and len(sess_cols) > 0:
+        cursor.execute("ALTER TABLE user_sessions ADD COLUMN csrf_token TEXT DEFAULT ''")
 
     # Ensure index on user_sessions expires_at and user_id for fast lookup & pruning
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id)")
@@ -503,9 +507,17 @@ def add_notification(conn, user_id: int, notif_type: str, title: str, desc: str)
 # FASTAPI BACKEND SETUP
 # ============================================================
 
+# Configure API documentation URLs: disabled in production for security (SEC-03)
+docs_url = None if IS_PRODUCTION else "/docs"
+redoc_url = None if IS_PRODUCTION else "/redoc"
+openapi_url = None if IS_PRODUCTION else "/openapi.json"
+
 app = FastAPI(
     title="AI Business Operations Copilot",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url=docs_url,
+    redoc_url=redoc_url,
+    openapi_url=openapi_url
 )
 
 app.add_middleware(
@@ -1076,9 +1088,27 @@ class SignupRateLimiter:
 signup_limiter = SignupRateLimiter(max_attempts_per_ip=15, window_seconds=300)
 
 
-def generate_csrf_token() -> str:
-    """Generate a random cryptographic CSRF token."""
+def generate_session_csrf_token(session_token: str) -> str:
+    """Derive a cryptographically secure, unguessable CSRF token bound to the authenticated session."""
+    if not session_token:
+        return ""
+    return hmac.new(
+        SECRET_KEY.encode("utf-8"),
+        f"bizops_csrf_session:{session_token}".encode("utf-8"),
+        hashlib.sha256
+    ).hexdigest()
+
+
+def generate_preauth_csrf_token() -> str:
+    """Generate a random cryptographic CSRF token for pre-authenticated sessions."""
     return secrets.token_urlsafe(32)
+
+
+def generate_csrf_token(session_token: Optional[str] = None) -> str:
+    """Generate a session-bound or pre-auth CSRF token."""
+    if session_token:
+        return generate_session_csrf_token(session_token)
+    return generate_preauth_csrf_token()
 
 
 def hash_password(plain_password: str) -> str:
@@ -1111,20 +1141,27 @@ def create_user_session(cursor, user_id: int) -> str:
     last_activity = created_at
 
     token = secrets.token_urlsafe(32)
+    csrf_tok = generate_session_csrf_token(token)
     cursor.execute("""
-    INSERT INTO user_sessions (token, user_id, created_at, expires_at, last_activity, revoked_at)
-    VALUES (?, ?, ?, ?, ?, NULL)
-    """, (token, user_id, created_at, expires_at, last_activity))
+    INSERT INTO user_sessions (token, user_id, created_at, expires_at, last_activity, revoked_at, csrf_token)
+    VALUES (?, ?, ?, ?, ?, NULL, ?)
+    """, (token, user_id, created_at, expires_at, last_activity, csrf_tok))
     return token
 
 
 def get_authenticated_user(request: Request) -> dict:
-    """Dependency: Extract session token from cookie (or fallback Bearer header), validate and return user."""
-    token = request.cookies.get("session_token")
+    """Dependency: Extract session token from cookie (or fallback Bearer header), validate and return user.
+    Enforces strict CSRF token validation on all state-changing requests authenticated via cookies.
+    """
+    cookie_token = request.cookies.get("session_token")
+    auth_via_cookie = bool(cookie_token)
+    token = cookie_token
+
     if not token:
         auth_header = request.headers.get("Authorization")
         if auth_header and auth_header.startswith("Bearer "):
             token = auth_header.split("Bearer ", 1)[1].strip()
+            auth_via_cookie = False
 
     if not token:
         raise HTTPException(status_code=401, detail="Unauthorized - authentication required")
@@ -1133,7 +1170,7 @@ def get_authenticated_user(request: Request) -> dict:
     cursor = conn.cursor()
     try:
         cursor.execute("""
-        SELECT s.token, s.expires_at, s.revoked_at, s.last_activity, u.id, u.name, u.email, u.company, u.biz_type, u.is_active
+        SELECT s.token, s.expires_at, s.revoked_at, s.last_activity, s.csrf_token, u.id, u.name, u.email, u.company, u.biz_type, u.is_active
         FROM user_sessions s
         JOIN users u ON s.user_id = u.id
         WHERE s.token = ?
@@ -1156,6 +1193,32 @@ def get_authenticated_user(request: Request) -> dict:
                 raise HTTPException(status_code=401, detail="Unauthorized - session expired")
         except ValueError:
             pass
+
+        # Secure CSRF token bound to this specific session
+        expected_csrf = row_dict.get("csrf_token") or generate_session_csrf_token(token.strip())
+
+        # Enforce CSRF protection on state-changing requests authenticated through cookies
+        if auth_via_cookie and request.method in ("POST", "PUT", "DELETE", "PATCH"):
+            csrf_header = request.headers.get("X-CSRF-Token") or request.headers.get("X-XSRF-Token")
+            if not csrf_header or not csrf_header.strip():
+                logger.warning(
+                    "CSRF validation failed: missing X-CSRF-Token header on %s %s (user_id=%s)",
+                    request.method, request.url.path, row_dict["id"]
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="CSRF token missing. A valid X-CSRF-Token request header is required for cookie-authenticated state-changing requests."
+                )
+
+            if not hmac.compare_digest(csrf_header.strip(), expected_csrf):
+                logger.warning(
+                    "CSRF validation failed: mismatched X-CSRF-Token header on %s %s (user_id=%s)",
+                    request.method, request.url.path, row_dict["id"]
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Invalid or mismatched CSRF token. Request rejected."
+                )
 
         # Throttle last_activity updates to at most once every 5 minutes to avoid SQLite write lock contention
         try:
@@ -1184,7 +1247,10 @@ def get_authenticated_user(request: Request) -> dict:
             "name": row_dict["name"],
             "email": row_dict["email"],
             "company": row_dict["company"] or "",
-            "biz_type": row_dict["biz_type"] or "E-commerce"
+            "biz_type": row_dict["biz_type"] or "E-commerce",
+            "session_token": token.strip(),
+            "csrf_token": expected_csrf,
+            "auth_via_cookie": auth_via_cookie
         }
     finally:
         try:
@@ -1202,9 +1268,14 @@ class LogoutRequest(BaseModel):
 # ============================================================
 
 @app.get("/api/auth/csrf")
-def get_csrf_token(response: Response):
+def get_csrf_token(request: Request, response: Response):
     """Issue a fresh CSRF token stored in a readable cookie and JSON response."""
-    token = generate_csrf_token()
+    session_token = request.cookies.get("session_token")
+    if session_token:
+        token = generate_session_csrf_token(session_token.strip())
+    else:
+        token = generate_preauth_csrf_token()
+
     response.set_cookie(
         key="csrf_token",
         value=token,
@@ -1426,7 +1497,7 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
                 )
 
             token = create_user_session(cursor, user_dict["id"])
-            csrf_tok = generate_csrf_token()
+            csrf_tok = generate_session_csrf_token(token)
             conn.commit()
 
             # Set HTTP-only session cookie
@@ -1454,7 +1525,7 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
 
             return {
                 "status": "success",
-                "token": token,
+                "message": "Signed in successfully.",
                 "user": {
                     "id": user_dict["id"],
                     "name": user_dict["name"],
@@ -1507,7 +1578,18 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
 
 
 @app.get("/api/auth/me")
-def get_current_user_me(user: dict = Depends(get_authenticated_user)):
+def get_current_user_me(response: Response, user: dict = Depends(get_authenticated_user)):
+    csrf_tok = user.get("csrf_token") or (generate_session_csrf_token(user.get("session_token", "")) if user.get("session_token") else "")
+    if csrf_tok:
+        response.set_cookie(
+            key="csrf_token",
+            value=csrf_tok,
+            httponly=False,
+            samesite="lax",
+            path="/",
+            secure=SESSION_COOKIE_SECURE,
+            max_age=7 * 86400
+        )
     return {
         "status": "success",
         "id": user["id"],
@@ -1515,19 +1597,43 @@ def get_current_user_me(user: dict = Depends(get_authenticated_user)):
         "email": user["email"],
         "company": user.get("company", ""),
         "biz_type": user.get("biz_type", ""),
-        "user": user
+        "csrf_token": csrf_tok,
+        "user": {
+            "id": user["id"],
+            "name": user["name"],
+            "email": user["email"],
+            "company": user.get("company", ""),
+            "biz_type": user.get("biz_type", "")
+        }
     }
 
 
 @app.post("/api/auth/logout")
 def logout_user(request: Request, response: Response):
-    token = request.cookies.get("session_token")
+    cookie_token = request.cookies.get("session_token")
+    auth_via_cookie = bool(cookie_token)
+    token = cookie_token
     if not token:
         auth_header = request.headers.get("Authorization")
         if auth_header and auth_header.startswith("Bearer "):
             token = auth_header.split("Bearer ", 1)[1].strip()
 
     if token:
+        # Validate CSRF token if request is authenticated through cookies
+        if auth_via_cookie:
+            csrf_header = request.headers.get("X-CSRF-Token") or request.headers.get("X-XSRF-Token")
+            if not csrf_header or not csrf_header.strip():
+                raise HTTPException(
+                    status_code=403,
+                    detail="CSRF token missing. A valid X-CSRF-Token request header is required for logout."
+                )
+            expected_csrf = generate_session_csrf_token(token.strip())
+            if not hmac.compare_digest(csrf_header.strip(), expected_csrf):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Invalid or mismatched CSRF token. Logout rejected."
+                )
+
         conn = get_db()
         cursor = conn.cursor()
         try:
@@ -1547,8 +1653,20 @@ def logout_user(request: Request, response: Response):
             except Exception:
                 pass
 
-    response.delete_cookie("session_token", path="/")
-    response.delete_cookie("csrf_token", path="/")
+    response.delete_cookie(
+        key="session_token",
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=SESSION_COOKIE_SECURE
+    )
+    response.delete_cookie(
+        key="csrf_token",
+        path="/",
+        httponly=False,
+        samesite="lax",
+        secure=SESSION_COOKIE_SECURE
+    )
 
     return {"status": "success", "message": "Logged out successfully"}
 
@@ -3984,7 +4102,7 @@ def get_action_center(user: dict = Depends(get_authenticated_user)):
 @app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"], include_in_schema=False)
 def serve_spa_frontend(full_path: str, request: Request):
     clean_path = full_path.lstrip("/")
-    # Strictly protect API routes, auth endpoints, health, docs, and schema from being caught by SPA fallback
+    # Strictly protect API routes, auth endpoints, health, docs, redoc, and schema from being caught by SPA fallback
     if (
         clean_path.startswith("api/")
         or clean_path == "api"
@@ -3992,8 +4110,12 @@ def serve_spa_frontend(full_path: str, request: Request):
         or clean_path == "auth"
         or clean_path == "health"
         or clean_path.startswith("health/")
-        or clean_path.startswith("docs")
-        or clean_path.startswith("openapi.json")
+        or clean_path == "docs"
+        or clean_path.startswith("docs/")
+        or clean_path == "redoc"
+        or clean_path.startswith("redoc/")
+        or clean_path == "openapi.json"
+        or clean_path.startswith("openapi.json/")
     ):
         raise HTTPException(status_code=404, detail=f"API route not found: /{clean_path}")
 
