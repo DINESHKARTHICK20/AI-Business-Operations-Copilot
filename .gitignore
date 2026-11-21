@@ -99,6 +99,7 @@ backend/*.db-shm
 *.bak
 *.dump
 *.sql.gz
+backups/
 
 # ─── 8. Log Files & Temporary Files ─────────────────────────
 *.log

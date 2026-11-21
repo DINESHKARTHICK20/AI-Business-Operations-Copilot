@@ -93,10 +93,20 @@ def get_db():
     conn = sqlite3.connect(str(DB_PATH), timeout=30.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
-        conn.execute("PRAGMA foreign_keys = ON;")
         conn.execute("PRAGMA busy_timeout = 30000;")
-    except Exception:
-        pass
+        conn.execute("PRAGMA foreign_keys = ON;")
+        fk_check = conn.execute("PRAGMA foreign_keys;").fetchone()
+        if not fk_check or fk_check[0] != 1:
+            conn.close()
+            logger.critical("FATAL: SQLite foreign_keys constraint enforcement failed to activate.")
+            raise RuntimeError("Database connection initialization failed: foreign_keys enforcement could not be enabled.")
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        logger.critical("Database connection initialization error: %s", e)
+        raise
     return conn
 
 
@@ -104,11 +114,10 @@ def init_db():
     conn = get_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("PRAGMA foreign_keys = ON;")
         cursor.execute("PRAGMA journal_mode=WAL;")
         cursor.execute("PRAGMA synchronous=NORMAL;")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Could not set WAL or synchronous pragmas during init_db: %s", e)
 
     # Customers Table
     cursor.execute("""
