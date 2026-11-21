@@ -1270,8 +1270,19 @@ function SignUpPage({
       setErrorMsg("Password is required.");
       return;
     }
-    if (password.length < 6) {
-      setErrorMsg("Password must be at least 6 characters.");
+    if (password.length < 12) {
+      setErrorMsg("Password must be at least 12 characters long.");
+      return;
+    }
+    const pwdLower = password.toLowerCase();
+    const emailLocal = cleanEmail.split("@")[0].toLowerCase();
+    if (emailLocal.length >= 3 && pwdLower.includes(emailLocal)) {
+      setErrorMsg("Password must not contain your email address or username.");
+      return;
+    }
+    const commonWeak = ["password123", "password1234", "password12345", "123456789012", "qwerty123456", "admin1234567", "welcome12345", "123456"];
+    if (commonWeak.some(w => pwdLower === w || pwdLower.startsWith(w))) {
+      setErrorMsg("Password is too common or easily guessed. Please choose a more secure password.");
       return;
     }
     if (password !== confirm) {
@@ -1424,7 +1435,7 @@ function SignUpPage({
                     onChange={e => { setPassword(e.target.value); setErrorMsg(null); }}
                     type={showPassword ? "text" : "password"}
                     autoComplete="new-password"
-                    placeholder="Min. 6 characters"
+                    placeholder="Min. 12 characters"
                     className="w-full bg-white/5 border border-white/10 rounded-xl pl-4 pr-10 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/30"
                   />
                   <button
@@ -1436,6 +1447,20 @@ function SignUpPage({
                   >
                     {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
+                </div>
+                <div className="mt-1.5 space-y-1">
+                  <div className="flex items-center gap-1.5 text-[11px]">
+                    <span className={`w-1.5 h-1.5 rounded-full ${password.length >= 12 ? "bg-emerald-400" : "bg-slate-600"}`} />
+                    <span className={password.length >= 12 ? "text-emerald-400 font-medium" : "text-slate-400"}>
+                      At least 12 characters (passphrases welcome)
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[11px]">
+                    <span className={`w-1.5 h-1.5 rounded-full ${password && !password.toLowerCase().includes("password") && !password.toLowerCase().includes("123456") ? "bg-emerald-400" : "bg-slate-600"}`} />
+                    <span className="text-slate-400">
+                      Avoid common passwords, email, or your name
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -1484,7 +1509,7 @@ function SignUpPage({
 
             <button
               type="submit"
-              disabled={!fullName.trim() || !email.trim() || !password || password !== confirm || !agreed || loading || !!successMsg}
+              disabled={!fullName.trim() || !email.trim() || !password || password.length < 12 || password !== confirm || !agreed || loading || !!successMsg}
               className="w-full mt-5 py-3 bg-gradient-to-r from-indigo-500 to-violet-600 text-white font-semibold rounded-xl hover:from-indigo-600 hover:to-violet-700 transition-all shadow-lg shadow-indigo-900/50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {loading ? (

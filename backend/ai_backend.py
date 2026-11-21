@@ -86,13 +86,14 @@ CHURN_MODEL = MODEL_DIR / "churn_model.pkl"
 SALES_MODEL = MODEL_DIR / "sales_model.pkl"
 INVENTORY_MODEL = MODEL_DIR / "inventory_model.pkl"
 
-DB_PATH = BASE_DIR / "ai_bizops.db"
+DB_PATH = Path(os.environ.get("DB_PATH", str(BASE_DIR / "ai_bizops.db")))
 
 
 def get_db():
     conn = sqlite3.connect(str(DB_PATH), timeout=30.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
+        conn.execute("PRAGMA foreign_keys = ON;")
         conn.execute("PRAGMA busy_timeout = 30000;")
     except Exception:
         pass
@@ -103,6 +104,7 @@ def init_db():
     conn = get_db()
     cursor = conn.cursor()
     try:
+        cursor.execute("PRAGMA foreign_keys = ON;")
         cursor.execute("PRAGMA journal_mode=WAL;")
         cursor.execute("PRAGMA synchronous=NORMAL;")
     except Exception:
@@ -1111,19 +1113,150 @@ def generate_csrf_token(session_token: Optional[str] = None) -> str:
     return generate_preauth_csrf_token()
 
 
+# ============================================================
+# STRONG PASSWORD POLICY & VALIDATION (SEC-04)
+# ============================================================
+
+COMMON_WEAK_PASSWORDS = {
+    # Numerical sequences
+    "123456", "1234567", "12345678", "123456789", "1234567890", "123456789012", "012345678901",
+    "111111", "111111111111", "000000000000", "987654321098", "654321",
+    # Classic weak passwords
+    "password", "password123", "password1234", "password12345", "password123456",
+    "password!@#$", "p@ssword1234", "p@ssw0rd1234", "admin1234567", "administrator",
+    "qwerty", "qwerty123456", "qwertyuiopas", "asdfghjklzxc", "zxcvbnmasdfg",
+    "welcome12345", "welcome123456", "welcome2026!", "letmein12345", "iloveyou1234",
+    "changeme1234", "default12345", "business1234", "company12345", "secret123456",
+    "trustnoone12", "dragon123456", "monkey123456", "football1234", "baseball1234",
+    "master123456", "access123456", "superman1234", "sunshine1234", "princess1234"
+}
+
+COMMON_ROOTS = [
+    "password", "123456", "qwerty", "admin", "welcome", "letmein", "changeme",
+    "default", "iloveyou", "secret", "master", "access", "testing"
+]
+
+
+def validate_strong_password(
+    password: str,
+    email: Optional[str] = None,
+    name: Optional[str] = None
+) -> None:
+    """Validates password strength according to SEC-04 production requirements and NIST guidelines.
+    Enforces minimum 12 characters, rejects common/compromised passwords, eliminates obvious user
+    account patterns, and accommodates long passphrases without arbitrary complexity barriers.
+    """
+    if not password:
+        raise HTTPException(status_code=400, detail="Password is required.")
+
+    # 1. Minimum Length Requirement (>= 12 characters)
+    if len(password) < 12:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 12 characters long."
+        )
+
+    # 2. Maximum reasonable length to protect against DoS
+    if len(password) > 512:
+        raise HTTPException(
+            status_code=400,
+            detail="Password cannot exceed 512 characters."
+        )
+
+    pwd_lower = password.strip().lower()
+
+    # 3. Reject Known Common / Compromised Passwords
+    if pwd_lower in COMMON_WEAK_PASSWORDS:
+        raise HTTPException(
+            status_code=400,
+            detail="Password is too common or easily guessed. Please choose a more secure password."
+        )
+
+    # Check for root word with trivial numeric/symbol extensions
+    for root in COMMON_ROOTS:
+        for suffix in ["", "1", "12", "123", "1234", "12345", "123456", "!", "123!", "2026", "2026!"]:
+            if pwd_lower == root + suffix:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Password is based on a common easily guessed phrase. Please choose a stronger password."
+                )
+
+    # 4. Reject Single-Character Repetition and Simple Repetitive Sequences
+    if len(set(password)) <= 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Password cannot consist of a single repeated character."
+        )
+
+    if len(set(password)) <= 2 and len(password) >= 12:
+        raise HTTPException(
+            status_code=400,
+            detail="Password contains too much repetition. Please choose a more varied password or passphrase."
+        )
+
+    # 5. Prevent Obvious Account-Specific Information (Email / Name)
+    if name:
+        clean_name = name.strip().lower()
+        for token in re.split(r"\s+", clean_name):
+            if len(token) >= 4 and token in pwd_lower:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Password must not contain your name."
+                )
+
+    if email:
+        clean_email = email.strip().lower()
+        local_part = clean_email.split("@")[0] if "@" in clean_email else clean_email
+        if len(local_part) >= 3 and local_part in pwd_lower:
+            raise HTTPException(
+                status_code=400,
+                detail="Password must not contain your email address or username."
+            )
+        # Check sub-tokens of email (e.g. john.doe -> john, doe)
+        for token in re.split(r"[\._\-\+0-9]+", local_part):
+            if len(token) >= 4 and token in pwd_lower:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Password must not contain parts of your email address."
+                )
+
+
 def hash_password(plain_password: str) -> str:
-    """Securely hash a plain text password using bcrypt."""
+    """Securely hash a plain text password using bcrypt.
+    Safely handles passwords/passphrases of any length without crashing on bcrypt's 72-byte limit.
+    """
     salt = bcrypt.gensalt(rounds=12)
-    return bcrypt.hashpw(plain_password.encode("utf-8"), salt).decode("utf-8")
+    pw_bytes = plain_password.encode("utf-8")
+    if len(pw_bytes) > 72:
+        # Pre-hash long passphrases with SHA-256 (32 bytes) to safely fit bcrypt's 72-byte limit
+        pw_bytes = hashlib.sha256(pw_bytes).digest()
+    return bcrypt.hashpw(pw_bytes, salt).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a plain text password against a stored hashed password (bcrypt / legacy support)."""
+    """Verify a plain text password against a stored hashed password (bcrypt / legacy support).
+    Supports standard passwords, pre-hashed long passphrases, and 72-byte truncated passphrases.
+    """
     if not plain_password or not hashed_password:
         return False
     try:
         if hashed_password.startswith(("$2b$", "$2a$", "$2y$")):
-            return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
+            pw_bytes = plain_password.encode("utf-8")
+            hashed_bytes = hashed_password.encode("utf-8")
+            # 1. Standard check for passwords <= 72 bytes
+            if len(pw_bytes) <= 72:
+                if bcrypt.checkpw(pw_bytes, hashed_bytes):
+                    return True
+            # 2. SHA-256 pre-hashed check for long passphrases (> 72 bytes)
+            prehashed = hashlib.sha256(pw_bytes).digest()
+            if bcrypt.checkpw(prehashed, hashed_bytes):
+                return True
+            # 3. Truncated 72-byte fallback if previously hashed via truncation
+            if len(pw_bytes) > 72:
+                if bcrypt.checkpw(pw_bytes[:72], hashed_bytes):
+                    return True
+            return False
+
         if ":" in hashed_password:
             salt, h = hashed_password.split(":", 1)
             calc = hashlib.pbkdf2_hmac("sha256", plain_password.encode("utf-8"), salt.encode("utf-8"), 100000).hex()
@@ -1341,11 +1474,7 @@ def register_user(req: UserRegisterRequest, request: Request, response: Response
         raise HTTPException(status_code=400, detail="Name is required.")
     if not clean_email or not EMAIL_REGEX.match(clean_email):
         raise HTTPException(status_code=400, detail="Please enter a valid email address.")
-    if not raw_password:
-        raise HTTPException(status_code=400, detail="Password is required.")
-    if len(raw_password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
-
+    
     signup_limiter.record_attempt(client_ip)
 
     conn = get_db()
@@ -1356,6 +1485,9 @@ def register_user(req: UserRegisterRequest, request: Request, response: Response
 
         if existing:
             raise HTTPException(status_code=400, detail="An account with this email already exists. Please sign in.")
+
+        # Enforce SEC-04 strong password validation (length >= 12, common password blacklist, email/name pattern check)
+        validate_strong_password(raw_password, email=clean_email, name=clean_name)
 
         hashed_pw = hash_password(raw_password)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2797,6 +2929,14 @@ def create_invoice(inv: InvoiceCreate, user: dict = Depends(get_authenticated_us
             pass
         conn.close()
         raise
+    except sqlite3.IntegrityError as ie:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        conn.close()
+        logger.error("Database integrity error during invoice creation: %s", ie)
+        raise HTTPException(status_code=400, detail="Database integrity constraint violation.")
     except Exception as e:
         try:
             conn.rollback()
