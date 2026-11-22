@@ -1,8 +1,8 @@
 """
 Database Engine & Connection Pool Adapter
-AI Business Operations Copilot - Production Architecture
+AI Business Operations Copilot - Production & Staging Architecture
 
-Supports both PostgreSQL (via psycopg 3 and SQLAlchemy QueuePool) and SQLite fallback for local development.
+Supports MySQL (via PyMySQL and SQLAlchemy QueuePool), PostgreSQL, and SQLite fallback for local development.
 """
 
 import os
@@ -18,30 +18,54 @@ from sqlalchemy.pool import QueuePool, NullPool
 
 logger = logging.getLogger("bizops.database")
 
-# Environment configuration
-DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+# Environment configuration - Check DATABASE_URL or MYSQL_URL
+DATABASE_URL = (
+    os.environ.get("DATABASE_URL")
+    or os.environ.get("MYSQL_URL")
+    or os.environ.get("MYSQL_DATABASE_URL")
+    or ""
+).strip()
 
-# Normalize postgres:// to postgresql+psycopg://
-if DATABASE_URL.startswith("postgres://"):
+# Normalize connection string
+if DATABASE_URL.startswith("mysql://"):
+    DATABASE_URL = "mysql+pymysql://" + DATABASE_URL[len("mysql://"):]
+elif DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[len("postgres://"):]
 elif DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("postgresql+"):
     DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[len("postgresql://"):]
 
+IS_MYSQL = DATABASE_URL.startswith("mysql")
 IS_POSTGRES = DATABASE_URL.startswith("postgresql")
 
-if IS_POSTGRES:
-    # Production / Staging PostgreSQL Engine with Enterprise Connection Pooling
+if IS_MYSQL:
+    # Production / Staging MySQL Engine with Enterprise Connection Pooling (InnoDB, utf8mb4)
     engine = create_engine(
         DATABASE_URL,
         poolclass=QueuePool,
         pool_size=int(os.environ.get("DB_POOL_SIZE", "10")),
         max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", "20")),
         pool_pre_ping=True,       # Health-checks connections before checkout
-        pool_recycle=1800,        # Recycles idle connections every 30 minutes
+        pool_recycle=1800,        # Recycles idle connections every 30 minutes (prevents MySQL 8h timeout)
         pool_timeout=30,          # 30 second checkout timeout
+        connect_args={"charset": "utf8mb4"},
+        echo=False
+    )
+    logger.info("Configured MySQL database engine with QueuePool (InnoDB, utf8mb4).")
+
+elif IS_POSTGRES:
+    # Production / Staging PostgreSQL Engine with Enterprise Connection Pooling
+    engine = create_engine(
+        DATABASE_URL,
+        poolclass=QueuePool,
+        pool_size=int(os.environ.get("DB_POOL_SIZE", "10")),
+        max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", "20")),
+        pool_pre_ping=True,
+        pool_recycle=1800,
+        pool_timeout=30,
         echo=False
     )
     logger.info("Configured PostgreSQL database engine with QueuePool.")
+
 else:
     # Development / Fallback SQLite Engine
     SQLITE_PATH = Path(os.environ.get("DB_PATH", "backend/ai_bizops.db")).resolve()
@@ -89,13 +113,13 @@ def get_safe_db_info(url_override: Optional[str] = None) -> Dict[str, Any]:
             "dialect": "sqlite",
             "host": "localhost",
             "database": str(Path(os.environ.get("DB_PATH", "backend/ai_bizops.db")).name),
+            "is_mysql": False,
             "is_postgres": False,
             "ssl_enabled": False,
         }
 
     try:
         parsed = urlparse(target_url)
-        # Mask password
         netloc = parsed.netloc
         if "@" in netloc:
             user_part, host_part = netloc.split("@", 1)
@@ -104,20 +128,26 @@ def get_safe_db_info(url_override: Optional[str] = None) -> Dict[str, Any]:
         else:
             masked_netloc = netloc
 
+        dialect = parsed.scheme.split("+")[0]
+        engine_name = "MySQL" if "mysql" in parsed.scheme else ("PostgreSQL" if "postgres" in parsed.scheme else dialect)
+        default_port = 3306 if "mysql" in parsed.scheme else 5432
+
         return {
-            "engine": "PostgreSQL" if "postgresql" in parsed.scheme else parsed.scheme,
+            "engine": engine_name,
             "dialect": parsed.scheme,
             "host": parsed.hostname or "localhost",
-            "port": parsed.port or 5432,
+            "port": parsed.port or default_port,
             "database": parsed.path.lstrip("/"),
-            "is_postgres": "postgresql" in parsed.scheme,
-            "ssl_enabled": "sslmode" in parsed.query,
+            "is_mysql": "mysql" in parsed.scheme,
+            "is_postgres": "postgres" in parsed.scheme,
+            "ssl_enabled": "ssl" in parsed.query or "sslmode" in parsed.query,
             "masked_target": f"{parsed.scheme}://{masked_netloc}{parsed.path}"
         }
     except Exception as e:
         return {
             "engine": "Unknown",
             "error": str(e),
+            "is_mysql": False,
             "is_postgres": False
         }
 
@@ -141,6 +171,7 @@ def test_database_connection(url_override: Optional[str] = None) -> Dict[str, An
                     "safe_info": safe_info,
                     "test_scalar": res,
                     "foreign_keys_active": fk == 1,
+                    "server_version": "SQLite 3.x",
                     "error": None
                 }
         except Exception as e:
@@ -149,30 +180,37 @@ def test_database_connection(url_override: Optional[str] = None) -> Dict[str, An
                 "safe_info": safe_info,
                 "test_scalar": None,
                 "foreign_keys_active": False,
+                "server_version": None,
                 "error": str(e)
             }
 
-    # Test PostgreSQL connection with isolated engine
+    # Test MySQL / PostgreSQL connection with isolated engine
     test_eng = None
     try:
+        connect_args = {}
+        if "mysql" in test_url:
+            connect_args = {"charset": "utf8mb4", "connect_timeout": 5}
+        else:
+            connect_args = {"connect_timeout": 5}
+
         test_eng = create_engine(
             test_url,
             poolclass=NullPool,
-            connect_args={"connect_timeout": 5}
+            connect_args=connect_args
         )
         with test_eng.connect() as conn:
             val = conn.execute(text("SELECT 1;")).scalar()
-            ver = conn.execute(text("SELECT version();")).scalar()
+            ver = conn.execute(text("SELECT VERSION();")).scalar()
             return {
                 "status": "connected",
                 "safe_info": safe_info,
                 "test_scalar": val,
-                "server_version": str(ver).split(" ")[0] if ver else "PostgreSQL",
+                "server_version": str(ver) if ver else "MySQL",
                 "error": None
             }
     except Exception as exc:
         err_msg = str(exc)
-        # Strip any accidental passwords from exception message
+        # Strip passwords from exception message
         sanitized_err = re.sub(r':[^:@]+@', ':***@', err_msg)
         return {
             "status": "failed",

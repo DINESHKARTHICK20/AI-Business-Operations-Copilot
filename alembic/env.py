@@ -24,9 +24,11 @@ target_metadata = Base.metadata
 
 def get_url():
     """Returns database URL from environment or alembic config."""
-    db_url = os.environ.get("DATABASE_URL", "").strip()
+    db_url = (os.environ.get("DATABASE_URL") or os.environ.get("MYSQL_URL") or "").strip()
     if db_url:
-        if db_url.startswith("postgres://"):
+        if db_url.startswith("mysql://"):
+            db_url = "mysql+pymysql://" + db_url[len("mysql://"):]
+        elif db_url.startswith("postgres://"):
             db_url = "postgresql+psycopg://" + db_url[len("postgres://"):]
         elif db_url.startswith("postgresql://") and not db_url.startswith("postgresql+"):
             db_url = "postgresql+psycopg://" + db_url[len("postgresql://"):]
