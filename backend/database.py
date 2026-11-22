@@ -10,7 +10,7 @@ import re
 import logging
 from pathlib import Path
 from typing import Generator, Dict, Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote_plus, unquote
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
@@ -18,21 +18,41 @@ from sqlalchemy.pool import QueuePool, NullPool
 
 logger = logging.getLogger("bizops.database")
 
+def normalize_database_url(url: str) -> str:
+    """
+    Safely normalizes database connection URLs:
+    - Normalizes mysql:// to mysql+pymysql://
+    - Normalizes postgres:// to postgresql+psycopg://
+    - Safely URL-encodes special characters in passwords (such as unencoded '@' or ':')
+      when the URL contains multiple '@' delimiters per RFC 3986.
+    """
+    if not url:
+        return ""
+    url = url.strip()
+    if url.startswith("mysql://"):
+        url = "mysql+pymysql://" + url[len("mysql://"):]
+    elif url.startswith("postgres://"):
+        url = "postgresql+psycopg://" + url[len("postgres://"):]
+    elif url.startswith("postgresql://") and not url.startswith("postgresql+"):
+        url = "postgresql+psycopg://" + url[len("postgresql://"):]
+
+    # Handle multiple '@' in URL (when password contains unencoded '@')
+    if url.count("@") > 1 and "://" in url:
+        scheme_and_rest, host_part = url.rsplit("@", 1)
+        scheme, creds = scheme_and_rest.split("://", 1)
+        if ":" in creds:
+            user, pw = creds.split(":", 1)
+            encoded_pw = quote_plus(unquote(pw))
+            url = f"{scheme}://{user}:{encoded_pw}@{host_part}"
+    return url
+
 # Environment configuration - Check DATABASE_URL or MYSQL_URL
-DATABASE_URL = (
+DATABASE_URL = normalize_database_url(
     os.environ.get("DATABASE_URL")
     or os.environ.get("MYSQL_URL")
     or os.environ.get("MYSQL_DATABASE_URL")
     or ""
-).strip()
-
-# Normalize connection string
-if DATABASE_URL.startswith("mysql://"):
-    DATABASE_URL = "mysql+pymysql://" + DATABASE_URL[len("mysql://"):]
-elif DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[len("postgres://"):]
-elif DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("postgresql+"):
-    DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[len("postgresql://"):]
+)
 
 IS_MYSQL = DATABASE_URL.startswith("mysql")
 IS_POSTGRES = DATABASE_URL.startswith("postgresql")

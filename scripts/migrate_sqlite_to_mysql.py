@@ -25,7 +25,7 @@ from typing import Dict, Any, List, Tuple, Optional
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.database import get_safe_db_info, test_database_connection
+from backend.database import get_safe_db_info, test_database_connection, normalize_database_url
 from sqlalchemy import create_engine, text, inspect
 from sqlalchemy.orm import sessionmaker
 
@@ -47,13 +47,14 @@ def compute_file_sha256(filepath: Path) -> str:
 class MySQLStagingMigrationRunner:
     def __init__(self, backup_db_path: Path, target_db_url: Optional[str] = None):
         self.source_backup_path = Path(backup_db_path).resolve()
-        self.target_url = (
+        raw_url = (
             target_db_url
             or os.environ.get("DATABASE_URL")
             or os.environ.get("MYSQL_URL")
             or os.environ.get("MYSQL_DATABASE_URL")
             or ""
         ).strip()
+        self.target_url = normalize_database_url(raw_url)
         
         # Staging isolation
         self.scratch_dir = PROJECT_ROOT / "scratch" / "mysql_staging"
