@@ -3109,7 +3109,7 @@ def get_sales_overview(user: dict = Depends(get_authenticated_user)):
     monthly_exp = {m: 0.0 for m in month_names}
 
     paid_invoices = [inv for inv in invoices if inv["status"] == "Paid"]
-    total_revenue_num = sum(inv["amount_num"] or 0.0 for inv in paid_invoices)
+    total_revenue_num = sum(float(inv["amount_num"] or 0.0) for inv in paid_invoices)
     total_orders_count = len(paid_invoices)
     avg_order_value_num = (total_revenue_num / total_orders_count) if total_orders_count > 0 else 0.0
 
@@ -3128,7 +3128,7 @@ def get_sales_overview(user: dict = Depends(get_authenticated_user)):
     for inv in invoices:
         if inv["status"] == "Paid":
             dt = parse_inv_date(inv["issued"])
-            amt = inv["amount_num"] or 0.0
+            amt = float(inv["amount_num"] or 0.0)
             if dt:
                 m_label = month_names[dt.month - 1]
                 monthly_rev[m_label] += amt
@@ -3142,7 +3142,7 @@ def get_sales_overview(user: dict = Depends(get_authenticated_user)):
     # Track real expenses by month from expenses table
     for exp in expenses_rows:
         dt = parse_inv_date(exp["date"])
-        amt = exp["amount"] or 0.0
+        amt = float(exp["amount"] or 0.0)
         if dt:
             m_label = month_names[dt.month - 1]
             monthly_exp[m_label] += amt
@@ -3167,7 +3167,7 @@ def get_sales_overview(user: dict = Depends(get_authenticated_user)):
         dt = parse_inv_date(inv["issued"])
         if dt:
             day_name = daily_names[dt.weekday()]
-            daily_sales[day_name]["sales"] += (inv["amount_num"] or 0.0)
+            daily_sales[day_name]["sales"] += float(inv["amount_num"] or 0.0)
             daily_sales[day_name]["orders"] += 1
 
     daily = [
@@ -3183,10 +3183,10 @@ def get_sales_overview(user: dict = Depends(get_authenticated_user)):
         dt = parse_inv_date(inv["issued"])
         if dt:
             d_key = dt.date()
-            sales_by_date[d_key] = sales_by_date.get(d_key, 0.0) + (inv["amount_num"] or 0.0)
+            sales_by_date[d_key] = sales_by_date.get(d_key, 0.0) + float(inv["amount_num"] or 0.0)
             orders_by_date[d_key] = orders_by_date.get(d_key, 0) + 1
 
-    max_day_sales = max(sales_by_date.values()) if sales_by_date else 0.0
+    max_day_sales = float(max(sales_by_date.values())) if sales_by_date else 0.0
     day_abbrs = ["M", "T", "W", "T", "F", "S", "S"]
     heatmap = []
     for i in range(28):
@@ -3237,9 +3237,9 @@ def get_sales_overview(user: dict = Depends(get_authenticated_user)):
 
     palette = ["#4f46e5", "#8b5cf6", "#06b6d4", "#10b981", "#f59e0b", "#ec4899", "#ef4444"]
     product_categories = []
-    total_cat_val = sum(r["total_val"] or 0.0 for r in item_rows)
+    total_cat_val = sum(float(r["total_val"] or 0.0) for r in item_rows)
     for i, r in enumerate(item_rows):
-        val = r["total_val"] or 0.0
+        val = float(r["total_val"] or 0.0)
         pct = round((val / total_cat_val) * 100) if total_cat_val > 0 else 0
         product_categories.append({
             "name": r["product_name"],
@@ -3258,10 +3258,10 @@ def get_sales_overview(user: dict = Depends(get_authenticated_user)):
         if dt:
             inv_d = dt.date()
             if period1_start <= inv_d <= today:
-                p1_rev += (inv["amount_num"] or 0.0)
+                p1_rev += float(inv["amount_num"] or 0.0)
                 p1_orders += 1
             elif period2_start <= inv_d < period1_start:
-                p2_rev += (inv["amount_num"] or 0.0)
+                p2_rev += float(inv["amount_num"] or 0.0)
                 p2_orders += 1
 
     if p2_rev > 0:

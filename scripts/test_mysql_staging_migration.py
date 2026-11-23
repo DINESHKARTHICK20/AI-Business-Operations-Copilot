@@ -123,7 +123,7 @@ class MySQLStagingVerificationSuite:
         self.record_test(
             "TEST-02",
             "Alembic MySQL Staging Migration DDL & Table Structure",
-            all_tables_present and alembic_rev == "001_initial_schema",
+            all_tables_present and alembic_rev in ("001_initial_schema", "002_alter_customers_churn_to_int"),
             {
                 "total_tables": len(tables),
                 "alembic_revision": alembic_rev,

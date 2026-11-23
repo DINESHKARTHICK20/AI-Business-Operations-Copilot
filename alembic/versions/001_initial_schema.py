@@ -70,7 +70,7 @@ def upgrade() -> None:
         sa.Column('total_spend', sa.Numeric(precision=14, scale=2), server_default=sa.text('0.00'), nullable=False),
         sa.Column('orders', sa.Integer(), server_default=sa.text('0'), nullable=False),
         sa.Column('joined', sa.String(length=50), server_default='', nullable=False),
-        sa.Column('churn', sa.Integer(), server_default=sa.text('0'), nullable=False),
+        sa.Column('churn', sa.Boolean(), server_default=sa.text('0'), nullable=False),
         sa.Column('days_since_last_purchase', sa.Integer(), server_default=sa.text('0'), nullable=False),
         sa.Column('support_tickets', sa.Integer(), server_default=sa.text('0'), nullable=False),
         sa.Column('complaints', sa.Integer(), server_default=sa.text('0'), nullable=False),

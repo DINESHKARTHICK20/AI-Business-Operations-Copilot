@@ -169,7 +169,7 @@ async function main() {
     return;
   }
 
-  console.log('[dev] FastAPI backend verified healthy & connected to SQLite database.');
+  console.log('[dev] FastAPI backend verified healthy & connected to active database.');
 
   // 4. Start Vite frontend server
   console.log(`[dev] Starting Vite dev server on http://localhost:${FRONTEND_PORT}/...`);
