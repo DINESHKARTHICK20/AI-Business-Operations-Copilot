@@ -88,29 +88,22 @@ INVENTORY_MODEL = MODEL_DIR / "inventory_model.pkl"
 
 DB_PATH = Path(os.environ.get("DB_PATH", str(BASE_DIR / "ai_bizops.db")))
 
-
-def get_db():
-    conn = sqlite3.connect(str(DB_PATH), timeout=30.0, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("PRAGMA busy_timeout = 30000;")
-        conn.execute("PRAGMA foreign_keys = ON;")
-        fk_check = conn.execute("PRAGMA foreign_keys;").fetchone()
-        if not fk_check or fk_check[0] != 1:
-            conn.close()
-            logger.critical("FATAL: SQLite foreign_keys constraint enforcement failed to activate.")
-            raise RuntimeError("Database connection initialization failed: foreign_keys enforcement could not be enabled.")
-    except Exception as e:
-        try:
-            conn.close()
-        except Exception:
-            pass
-        logger.critical("Database connection initialization error: %s", e)
-        raise
-    return conn
+# Import database abstraction layer supporting MySQL with SQLite fallback
+from backend.database import get_db, is_mysql_mode, get_safe_db_info
 
 
 def init_db():
+    if is_mysql_mode():
+        logger.info("Running in MySQL mode. Schema, migrations, and DDL managed by Alembic.")
+        try:
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1;")
+            conn.close()
+        except Exception as e:
+            logger.warning("MySQL connection check during init_db: %s", e)
+        return
+
     conn = get_db()
     cursor = conn.cursor()
     try:
@@ -506,7 +499,7 @@ def add_notification(conn, user_id: int, notif_type: str, title: str, desc: str)
     try:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         conn.execute("""
-        INSERT INTO notifications (user_id, type, title, desc, read, created_at)
+        INSERT INTO notifications (user_id, type, title, `desc`, `read`, created_at)
         VALUES (?, ?, ?, ?, 0, ?)
         """, (user_id, notif_type, title, desc, now_str))
         conn.commit()
@@ -1330,10 +1323,14 @@ def get_authenticated_user(request: Request) -> dict:
             raise HTTPException(status_code=401, detail="Unauthorized - account disabled")
 
         try:
-            exp = datetime.strptime(row_dict["expires_at"], "%Y-%m-%d %H:%M:%S")
+            raw_exp = row_dict["expires_at"]
+            if isinstance(raw_exp, datetime):
+                exp = raw_exp
+            else:
+                exp = datetime.strptime(str(raw_exp), "%Y-%m-%d %H:%M:%S")
             if datetime.now() > exp:
                 raise HTTPException(status_code=401, detail="Unauthorized - session expired")
-        except ValueError:
+        except (ValueError, TypeError):
             pass
 
         # Secure CSRF token bound to this specific session
@@ -3028,7 +3025,7 @@ def mark_all_notifications_read(user: dict = Depends(get_authenticated_user)):
     conn = get_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("UPDATE notifications SET read = 1 WHERE user_id = ?", (user["id"],))
+        cursor.execute("UPDATE notifications SET `read` = 1 WHERE user_id = ?", (user["id"],))
         conn.commit()
         return {"status": "success", "message": "All notifications marked as read."}
     finally:
@@ -3043,7 +3040,7 @@ def mark_notification_read(notif_id: int, user: dict = Depends(get_authenticated
     conn = get_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?", (notif_id, user["id"]))
+        cursor.execute("UPDATE notifications SET `read` = 1 WHERE id = ? AND user_id = ?", (notif_id, user["id"]))
         conn.commit()
         return {"status": "success", "id": notif_id}
     finally:

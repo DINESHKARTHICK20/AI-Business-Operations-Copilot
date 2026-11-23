@@ -277,7 +277,7 @@ class MySQLStagingMigrationRunner:
                     "total_spend": Decimal(str(r["total_spend"] or "0.00")),
                     "orders": int(r["orders"] or 0),
                     "joined": r["joined"] or "",
-                    "churn": int(bool(r["churn"])),
+                    "churn": int(r["churn"] or 0),
                     "days_since_last_purchase": int(r["days_since_last_purchase"] or 0),
                     "support_tickets": int(r["support_tickets"] or 0),
                     "complaints": int(r["complaints"] or 0),

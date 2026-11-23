@@ -7,6 +7,7 @@ Supports MySQL (via PyMySQL and SQLAlchemy QueuePool), PostgreSQL, and SQLite fa
 
 import os
 import re
+import sqlite3
 import logging
 from pathlib import Path
 from typing import Generator, Dict, Any, Optional
@@ -62,9 +63,23 @@ DATABASE_URL = normalize_database_url(
 IS_MYSQL = DATABASE_URL.startswith("mysql")
 IS_POSTGRES = DATABASE_URL.startswith("postgresql")
 
+# Environment toggle for runtime backend selection
+USE_MYSQL = (
+    os.environ.get("USE_MYSQL", "false").lower() in ("true", "1", "yes")
+    or os.environ.get("DB_BACKEND", "").lower() in ("mysql", "mariadb")
+)
+
+from backend.database_adapter import (
+    MySQLConnectionAdapter,
+    DatabaseIntegrityError,
+    DatabaseOperationalError,
+    RowAdapter
+)
+
+# 1. MySQL Engine (Connection Pool with QueuePool, utf8mb4)
+mysql_engine = None
 if IS_MYSQL:
-    # Production / Staging MySQL Engine with Enterprise Connection Pooling (InnoDB, utf8mb4)
-    engine = create_engine(
+    mysql_engine = create_engine(
         DATABASE_URL,
         poolclass=QueuePool,
         pool_size=int(os.environ.get("DB_POOL_SIZE", "10")),
@@ -77,41 +92,66 @@ if IS_MYSQL:
     )
     logger.info("Configured MySQL database engine with QueuePool (InnoDB, utf8mb4).")
 
-elif IS_POSTGRES:
-    # Production / Staging PostgreSQL Engine with Enterprise Connection Pooling
-    engine = create_engine(
-        DATABASE_URL,
-        poolclass=QueuePool,
-        pool_size=int(os.environ.get("DB_POOL_SIZE", "10")),
-        max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", "20")),
-        pool_pre_ping=True,
-        pool_recycle=1800,
-        pool_timeout=30,
-        echo=False
-    )
-    logger.info("Configured PostgreSQL database engine with QueuePool.")
+# 2. SQLite Engine (Development & fallback)
+SQLITE_PATH = Path(os.environ.get("DB_PATH", ROOT_DIR / "backend" / "ai_bizops.db")).resolve()
+sqlite_engine = create_engine(
+    f"sqlite:///{SQLITE_PATH.as_posix()}",
+    connect_args={"check_same_thread": False},
+    echo=False
+)
 
-else:
-    # Development / Fallback SQLite Engine
-    SQLITE_PATH = Path(os.environ.get("DB_PATH", "backend/ai_bizops.db")).resolve()
-    engine = create_engine(
-        f"sqlite:///{SQLITE_PATH.as_posix()}",
-        connect_args={"check_same_thread": False},
-        echo=False
-    )
+@event.listens_for(sqlite_engine, "connect")
+def _set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys = ON;")
+    cursor.execute("PRAGMA busy_timeout = 30000;")
+    cursor.close()
 
-    # Enforce SQLite foreign keys on every connection
-    @event.listens_for(engine, "connect")
-    def _set_sqlite_pragma(dbapi_connection, connection_record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys = ON;")
-        cursor.execute("PRAGMA busy_timeout = 30000;")
-        cursor.close()
-
-    logger.info("Configured SQLite database engine (fallback mode).")
+# Primary SQLAlchemy engine respects runtime configuration
+engine = mysql_engine if (USE_MYSQL and mysql_engine is not None) else sqlite_engine
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+
+def is_mysql_mode() -> bool:
+    """Returns True if MySQL is currently selected as the active backend."""
+    return (
+        os.environ.get("USE_MYSQL", "false").lower() in ("true", "1", "yes")
+        or os.environ.get("DB_BACKEND", "").lower() in ("mysql", "mariadb")
+    ) and (mysql_engine is not None)
+
+
+def get_db(mode: Optional[str] = None):
+    """
+    Universal database connection provider:
+    - In MySQL mode: returns MySQLConnectionAdapter wrapping a pooled DBAPI connection.
+    - In SQLite mode: returns standard sqlite3.Connection with foreign_keys enabled.
+    """
+    active_mysql = (mode == "mysql") or (mode is None and is_mysql_mode())
+    if active_mysql and mysql_engine is not None:
+        raw_conn = mysql_engine.raw_connection()
+        return MySQLConnectionAdapter(raw_conn)
+
+    # SQLite fallback mode
+    conn = sqlite3.connect(str(SQLITE_PATH), timeout=30.0, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA busy_timeout = 30000;")
+        conn.execute("PRAGMA foreign_keys = ON;")
+        fk_check = conn.execute("PRAGMA foreign_keys;").fetchone()
+        if not fk_check or fk_check[0] != 1:
+            conn.close()
+            logger.critical("FATAL: SQLite foreign_keys constraint enforcement failed to activate.")
+            raise RuntimeError("Database connection initialization failed: foreign_keys enforcement could not be enabled.")
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        logger.critical("Database connection initialization error: %s", e)
+        raise
+    return conn
 
 
 def get_db_session() -> Generator[Session, None, None]:

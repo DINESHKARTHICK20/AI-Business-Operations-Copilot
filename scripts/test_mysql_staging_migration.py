@@ -228,22 +228,28 @@ class MySQLStagingVerificationSuite:
         )
 
         # ---------------------------------------------------------
-        # TEST-08: Customer Management & Churn Boolean Casting
+        # TEST-08: Customer Management & Churn Integer Score Preservation
         # ---------------------------------------------------------
         with self.engine.connect() as conn:
             cust_cnt = conn.execute(text("SELECT COUNT(*) FROM customers;")).scalar()
             churn_types = conn.execute(text("SELECT DISTINCT churn FROM customers;")).fetchall()
             distinct_churn = [c[0] for c in churn_types]
+            col_info = conn.execute(text("""
+                SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = 'bizops_staging' AND TABLE_NAME = 'customers' AND COLUMN_NAME = 'churn';
+            """)).scalar()
 
-        all_booleans = all(c in [0, 1] for c in distinct_churn)
+        has_integer_scores = any(c > 1 for c in distinct_churn)
+        is_int_col = "int" in (col_info or "").lower()
         self.record_test(
             "TEST-08",
-            "Customer Management & Churn Boolean Casting (TINYINT(1))",
-            cust_cnt == 31 and all_booleans,
+            "Customer Management & Churn Integer Score Preservation (INT)",
+            cust_cnt == 31 and has_integer_scores and is_int_col,
             {
                 "customer_count": cust_cnt,
                 "churn_values_distinct": distinct_churn,
-                "is_tinyint_boolean": all_booleans
+                "data_type": col_info,
+                "has_integer_scores": has_integer_scores
             }
         )
 

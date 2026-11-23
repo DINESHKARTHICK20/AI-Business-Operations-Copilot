@@ -107,7 +107,7 @@ class Customer(Base):
     total_spend: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default=text("0.00"))
     orders: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     joined: Mapped[str] = mapped_column(String(50), default="", server_default="")
-    churn: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
+    churn: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     days_since_last_purchase: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     support_tickets: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     complaints: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
