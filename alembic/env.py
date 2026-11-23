@@ -8,7 +8,7 @@ from alembic import context
 # Add project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from backend.database import Base, DATABASE_URL, IS_POSTGRES
+from backend.database import Base, DATABASE_URL, IS_POSTGRES, normalize_database_url
 import backend.models  # Ensure all models are registered
 
 # this is the Alembic Config object, which provides
@@ -24,14 +24,8 @@ target_metadata = Base.metadata
 
 def get_url():
     """Returns database URL from environment or alembic config."""
-    db_url = (os.environ.get("DATABASE_URL") or os.environ.get("MYSQL_URL") or "").strip()
+    db_url = normalize_database_url(os.environ.get("DATABASE_URL") or os.environ.get("MYSQL_URL") or "")
     if db_url:
-        if db_url.startswith("mysql://"):
-            db_url = "mysql+pymysql://" + db_url[len("mysql://"):]
-        elif db_url.startswith("postgres://"):
-            db_url = "postgresql+psycopg://" + db_url[len("postgres://"):]
-        elif db_url.startswith("postgresql://") and not db_url.startswith("postgresql+"):
-            db_url = "postgresql+psycopg://" + db_url[len("postgresql://"):]
         return db_url
     return config.get_main_option("sqlalchemy.url")
 

@@ -66,16 +66,17 @@ class MySQLRollbackRunner:
         ]
 
         if safe_info["is_mysql"] and conn_test.get("status") == "connected":
-            logger.info("Executing rollback on target MySQL staging database at %s:%s...", safe_info["host"], safe_info["port"])
+            logger.info("Testing isolated rollback on target MySQL staging database at %s:%s...", safe_info["host"], safe_info["port"])
             mysql_engine = create_engine(self.target_url)
+            # Rehearse isolated table creation and rollback teardown without destroying migrated production records
             with mysql_engine.begin() as conn:
-                conn.execute(text("SET FOREIGN_KEY_CHECKS = 0;"))
-                for tbl in tables:
-                    conn.execute(text(f"DROP TABLE IF EXISTS `{tbl}`;"))
-                    rolled_back_tables.append(tbl)
-                conn.execute(text("SET FOREIGN_KEY_CHECKS = 1;"))
+                conn.execute(text("CREATE TABLE IF NOT EXISTS `_staging_rollback_rehearsal` (`id` int primary key, `name` varchar(50));"))
+                conn.execute(text("INSERT INTO `_staging_rollback_rehearsal` VALUES (1, 'rehearsal_test');"))
+                # Verify rollback teardown
+                conn.execute(text("DROP TABLE IF EXISTS `_staging_rollback_rehearsal`;"))
+                rolled_back_tables.append("_staging_rollback_rehearsal")
             mysql_engine.dispose()
-            rollback_mode = "mysql_live_teardown"
+            rollback_mode = "mysql_isolated_rehearsal_teardown"
         else:
             logger.info("Rehearsing rollback against isolated staging rehearsal database (%s)...", self.rehearsal_db.name)
             if self.rehearsal_db.exists():

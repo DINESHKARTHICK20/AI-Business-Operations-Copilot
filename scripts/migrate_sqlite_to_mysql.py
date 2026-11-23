@@ -202,6 +202,17 @@ class MySQLStagingMigrationRunner:
                 customer_lookup[(u_id, row["email"].strip().lower())] = row["id"]
 
         with target_engine.begin() as tgt_conn:
+            # Idempotent staging initialization: truncate tables if re-running
+            if target_engine.dialect.name == "mysql":
+                tgt_conn.execute(text("SET FOREIGN_KEY_CHECKS = 0;"))
+                for t in [
+                    "invoice_items", "invoices", "customers", "products", "employees",
+                    "business_activities", "notifications", "user_sessions",
+                    "profit_products", "expenses", "legacy_orphans_archive", "users"
+                ]:
+                    tgt_conn.execute(text(f"TRUNCATE TABLE `{t}`;"))
+                tgt_conn.execute(text("SET FOREIGN_KEY_CHECKS = 1;"))
+
             # 1. users
             src_cur.execute("SELECT * FROM users")
             users_data = []
@@ -215,7 +226,7 @@ class MySQLStagingMigrationRunner:
                     "company": r["company"] or "",
                     "biz_type": r["biz_type"] or "",
                     "created_at": r["created_at"],
-                    "updated_at": r["updated_at"] if "updated_at" in r.keys() else r["created_at"],
+                    "updated_at": r["updated_at"] if ("updated_at" in r.keys() and r["updated_at"]) else r["created_at"],
                     "is_active": int(bool(r["is_active"])) if "is_active" in r.keys() else 1,
                     "is_verified": int(bool(r["is_verified"])) if "is_verified" in r.keys() else 1,
                 })
@@ -239,7 +250,7 @@ class MySQLStagingMigrationRunner:
                         "created_at": r["created_at"],
                         "expires_at": r["expires_at"],
                         "last_activity": r["last_activity"],
-                        "revoked_at": r["revoked_at"],
+                        "revoked_at": r["revoked_at"] if r["revoked_at"] else None,
                         "csrf_token": r["csrf_token"] or ""
                     })
             if sessions_data:
@@ -577,7 +588,7 @@ class MySQLStagingMigrationRunner:
 
         # Target MySQL IS reachable and authenticated!
         logger.info("Connecting to target MySQL at %s:%s...", safe_info["host"], safe_info["port"])
-        mysql_engine = create_engine(self.target_url, poolclass=sessionmaker, echo=False)
+        mysql_engine = create_engine(self.target_url, pool_pre_ping=True, echo=False)
         from backend.models import Base
         Base.metadata.create_all(mysql_engine)
 

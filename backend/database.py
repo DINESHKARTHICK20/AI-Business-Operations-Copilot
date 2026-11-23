@@ -11,6 +11,11 @@ import logging
 from pathlib import Path
 from typing import Generator, Dict, Any, Optional
 from urllib.parse import urlparse, quote_plus, unquote
+from dotenv import load_dotenv
+
+# Ensure root .env is loaded
+ROOT_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT_DIR / ".env")
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
