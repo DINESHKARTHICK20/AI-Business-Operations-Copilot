@@ -17,6 +17,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -95,7 +96,10 @@ class UserSession(Base):
 # ============================================================
 class Customer(Base):
     __tablename__ = "customers"
-    __table_args__ = (MYSQL_TABLE_ARGS,)
+    __table_args__ = (
+        UniqueConstraint("id", "user_id", name="uq_customers_id_user"),
+        MYSQL_TABLE_ARGS,
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -124,6 +128,7 @@ class Product(Base):
     __tablename__ = "products"
     __table_args__ = (
         UniqueConstraint("user_id", "sku", name="uq_products_user_sku"),
+        UniqueConstraint("id", "user_id", name="uq_products_id_user"),
         Index("idx_products_user_sku", "user_id", "sku"),
         MYSQL_TABLE_ARGS,
     )
@@ -148,16 +153,26 @@ class Product(Base):
 
 
 # ============================================================
-# 5. INVOICES TABLE (FINANCIAL RETENTION RESTRICT)
+# 5. INVOICES TABLE (FINANCIAL RETENTION RESTRICT & COMPOSITE TENANT FK)
 # ============================================================
 class Invoice(Base):
     __tablename__ = "invoices"
-    __table_args__ = (MYSQL_TABLE_ARGS,)
+    __table_args__ = (
+        UniqueConstraint("id", "user_id", name="uq_invoices_id_user"),
+        ForeignKeyConstraint(
+            ["customer_id", "user_id"],
+            ["customers.id", "customers.user_id"],
+            name="fk_invoices_customer_tenant",
+            ondelete="RESTRICT",
+            onupdate="CASCADE"
+        ),
+        MYSQL_TABLE_ARGS,
+    )
 
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
     # ON DELETE RESTRICT guarantees invoices cannot be deleted via cascading user/customer deletes
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
-    customer_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("customers.id", ondelete="RESTRICT"), nullable=True, index=True)
+    customer_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
     client: Mapped[str] = mapped_column(String(255), nullable=False)
     amount: Mapped[str] = mapped_column(String(50), default="$0.00", server_default="$0.00")
     amount_num: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default=text("0.00"))
@@ -171,29 +186,66 @@ class Invoice(Base):
     total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default=text("0.00"))
 
     user: Mapped["User"] = relationship("User", back_populates="invoices")
-    customer: Mapped[Optional["Customer"]] = relationship("Customer", back_populates="invoices")
-    line_items: Mapped[List["InvoiceItem"]] = relationship("InvoiceItem", back_populates="invoice", cascade="all, delete-orphan")
+    customer: Mapped[Optional["Customer"]] = relationship(
+        "Customer",
+        back_populates="invoices",
+        foreign_keys=[customer_id, user_id],
+        primaryjoin="and_(Invoice.customer_id == Customer.id, Invoice.user_id == Customer.user_id)"
+    )
+    line_items: Mapped[List["InvoiceItem"]] = relationship(
+        "InvoiceItem",
+        back_populates="invoice",
+        cascade="all, delete-orphan",
+        foreign_keys="[InvoiceItem.invoice_id, InvoiceItem.user_id]",
+        primaryjoin="and_(Invoice.id == InvoiceItem.invoice_id, Invoice.user_id == InvoiceItem.user_id)"
+    )
 
 
 # ============================================================
-# 6. INVOICE ITEMS (IMMUTABLE SNAPSHOT ON DELETE SET NULL)
+# 6. INVOICE ITEMS (IMMUTABLE SNAPSHOT & COMPOSITE TENANT FKS)
 # ============================================================
 class InvoiceItem(Base):
     __tablename__ = "invoice_items"
-    __table_args__ = (MYSQL_TABLE_ARGS,)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["invoice_id", "user_id"],
+            ["invoices.id", "invoices.user_id"],
+            name="fk_invoice_items_invoice_tenant",
+            ondelete="CASCADE",
+            onupdate="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["product_id", "user_id"],
+            ["products.id", "products.user_id"],
+            name="fk_invoice_items_product_tenant",
+            ondelete="RESTRICT",
+            onupdate="CASCADE"
+        ),
+        MYSQL_TABLE_ARGS,
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    invoice_id: Mapped[str] = mapped_column(String(128), ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False, index=True)
-    # SET NULL preserves line item records when product catalog item is deleted
-    product_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("products.id", ondelete="SET NULL"), nullable=True, index=True)
+    invoice_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    # SET NULL / RESTRICT preserves line item records when product catalog item is altered
+    product_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
     product_name: Mapped[str] = mapped_column(String(255), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
     unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default=text("0.00"))
     line_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default=text("0.00"))
 
-    invoice: Mapped["Invoice"] = relationship("Invoice", back_populates="line_items")
-    product: Mapped[Optional["Product"]] = relationship("Product", back_populates="invoice_items")
+    invoice: Mapped["Invoice"] = relationship(
+        "Invoice",
+        back_populates="line_items",
+        foreign_keys=[invoice_id, user_id],
+        primaryjoin="and_(InvoiceItem.invoice_id == Invoice.id, InvoiceItem.user_id == Invoice.user_id)"
+    )
+    product: Mapped[Optional["Product"]] = relationship(
+        "Product",
+        back_populates="invoice_items",
+        foreign_keys=[product_id, user_id],
+        primaryjoin="and_(InvoiceItem.product_id == Product.id, InvoiceItem.user_id == Product.user_id)"
+    )
 
 
 # ============================================================
@@ -303,3 +355,23 @@ class LegacyOrphansArchive(Base):
     record_payload: Mapped[str] = mapped_column(Text, nullable=False)
     archived_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     archive_reason: Mapped[str] = mapped_column(String(255), default="Historical orphan record from deleted test user account", server_default="Historical orphan record from deleted test user account")
+
+
+# ============================================================
+# 13. RATE LIMITS (SEC-08 PERSISTENT & DISTRIBUTED ENFORCEMENT)
+# ============================================================
+class RateLimit(Base):
+    __tablename__ = "rate_limits"
+    __table_args__ = (
+        Index("ix_rate_limits_expires_at", "expires_at"),
+        MYSQL_TABLE_ARGS,
+    )
+
+    rate_key: Mapped[str] = mapped_column(String(191), primary_key=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    first_attempt_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    last_attempt_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+

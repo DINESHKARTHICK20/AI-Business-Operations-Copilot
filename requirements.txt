@@ -1,0 +1,34 @@
+# AI Business Operations Copilot - Production Dependencies
+# Pinned for Python 3.14.x / Windows Server 8.0.46 MySQL Architecture
+
+# 1. Web Framework & ASGI Server
+fastapi==0.141.1
+uvicorn==0.52.1
+starlette==1.6.0
+pydantic==2.13.4
+pydantic-core==2.46.4
+email-validator==2.3.0
+python-multipart==0.0.32
+
+# 2. Database ORM, Migrations & Drivers
+SQLAlchemy==2.0.52
+alembic==1.20.0
+PyMySQL==1.2.4
+cryptography==50.0.0
+
+# 3. Security, Authentication & Environment
+bcrypt==5.0.0
+python-dotenv==1.2.2
+
+# 4. Machine Learning & Analytics
+scikit-learn==1.9.0
+numpy==2.5.2
+pandas==3.0.5
+scipy==1.18.0
+joblib==1.5.3
+
+# 5. Document Generation & Utilities
+pymupdf==1.28.2
+python-dateutil==2.9.0.post0
+certifi==2026.11.20
+urllib3==2.8.0

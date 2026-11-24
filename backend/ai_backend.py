@@ -974,122 +974,18 @@ EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 
 
 # ============================================================
-# RATE LIMITING & SECURITY UTILITIES
+# RATE LIMITING & SECURITY UTILITIES (SEC-08 PERSISTENT & DISTRIBUTED)
 # ============================================================
 
-class LoginRateLimiter:
-    """In-memory rate limiter tracking failed login attempts by IP / email.
+from backend.rate_limiter import (
+    get_client_ip,
+    login_limiter,
+    signup_limiter,
+    LoginRateLimiter,
+    SignupRateLimiter,
+    DistributedRateLimiter,
+)
 
-    Two-tier protection:
-      - Per IP+email (rate_key): 5 attempts in 5 minutes — protects individual accounts
-      - Per IP only (ip_key):   20 attempts in 5 minutes — global safety net against
-        distributed brute-force across many emails from the same IP
-
-    The higher IP-only threshold prevents a brute-force test against one email
-    from locking out all users sharing the same IP (e.g. all localhost dev traffic).
-    """
-    def __init__(self, max_attempts_per_key: int = 5, max_attempts_per_ip: int = 20, window_seconds: int = 300):
-        self.max_attempts_per_key = max_attempts_per_key
-        self.max_attempts_per_ip = max_attempts_per_ip
-        self.window_seconds = window_seconds
-        self.attempts: Dict[str, List[float]] = {}
-
-    def _clean(self, key: str, now: float):
-        if key in self.attempts:
-            self.attempts[key] = [t for t in self.attempts[key] if now - t < self.window_seconds]
-            if not self.attempts[key]:
-                del self.attempts[key]
-
-    def is_rate_limited_key(self, key: str) -> bool:
-        """Check if an IP+email combination is rate-limited (per-account protection)."""
-        now = time.time()
-        self._clean(key, now)
-        return len(self.attempts.get(key, [])) >= self.max_attempts_per_key
-
-    def is_rate_limited_ip(self, ip: str) -> bool:
-        """Check if a bare IP is rate-limited (global safety net, higher threshold)."""
-        now = time.time()
-        self._clean(ip, now)
-        return len(self.attempts.get(ip, [])) >= self.max_attempts_per_ip
-
-    def record_failure(self, key: str):
-        now = time.time()
-        self._clean(key, now)
-        if key not in self.attempts:
-            self.attempts[key] = []
-        self.attempts[key].append(now)
-
-    def reset(self, key: str):
-        if key in self.attempts:
-            del self.attempts[key]
-
-    def get_remaining_seconds(self, key: str) -> int:
-        """Return seconds until the oldest attempt in the window expires (0 if not limited)."""
-        now = time.time()
-        self._clean(key, now)
-        timestamps = self.attempts.get(key, [])
-        if not timestamps:
-            return 0
-        oldest = min(timestamps)
-        remaining = self.window_seconds - (now - oldest)
-        return max(0, int(remaining))
-
-    def get_status(self, key: str, threshold: int = None) -> dict:
-        """Return non-sensitive diagnostic info for a rate-limit key."""
-        now = time.time()
-        self._clean(key, now)
-        timestamps = self.attempts.get(key, [])
-        count = len(timestamps)
-        limit = threshold if threshold is not None else self.max_attempts_per_key
-        return {
-            "attempts": count,
-            "limit": limit,
-            "is_blocked": count >= limit,
-            "remaining_seconds": self.get_remaining_seconds(key) if count >= limit else 0,
-            "window_seconds": self.window_seconds,
-        }
-
-
-login_limiter = LoginRateLimiter(max_attempts_per_key=5, max_attempts_per_ip=20, window_seconds=300)
-
-
-class SignupRateLimiter:
-    """In-memory rate limiter tracking signup attempts per IP to prevent registration flooding."""
-    def __init__(self, max_attempts_per_ip: int = 15, window_seconds: int = 300):
-        self.max_attempts_per_ip = max_attempts_per_ip
-        self.window_seconds = window_seconds
-        self.attempts: Dict[str, List[float]] = {}
-
-    def _clean(self, ip: str, now: float):
-        if ip in self.attempts:
-            self.attempts[ip] = [t for t in self.attempts[ip] if now - t < self.window_seconds]
-            if not self.attempts[ip]:
-                del self.attempts[ip]
-
-    def is_rate_limited(self, ip: str) -> bool:
-        now = time.time()
-        self._clean(ip, now)
-        return len(self.attempts.get(ip, [])) >= self.max_attempts_per_ip
-
-    def record_attempt(self, ip: str):
-        now = time.time()
-        self._clean(ip, now)
-        if ip not in self.attempts:
-            self.attempts[ip] = []
-        self.attempts[ip].append(now)
-
-    def get_remaining_seconds(self, ip: str) -> int:
-        now = time.time()
-        self._clean(ip, now)
-        timestamps = self.attempts.get(ip, [])
-        if not timestamps:
-            return 0
-        oldest = min(timestamps)
-        remaining = self.window_seconds - (now - oldest)
-        return max(0, int(remaining))
-
-
-signup_limiter = SignupRateLimiter(max_attempts_per_ip=15, window_seconds=300)
 
 
 def generate_session_csrf_token(session_token: str) -> str:
@@ -1434,7 +1330,7 @@ def get_rate_limit_status(request: Request, email: Optional[str] = Query(default
     Returns lockout info without exposing passwords, tokens, or other users' data.
     Optionally pass ?email=user@example.com to check the per-account lockout too.
     """
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = get_client_ip(request)
     ip_status = login_limiter.get_status(client_ip, threshold=login_limiter.max_attempts_per_ip)
 
     result = {
@@ -1462,12 +1358,13 @@ def register_user(req: UserRegisterRequest, request: Request, response: Response
     Ensures email uniqueness, securely hashes the password with bcrypt,
     and initializes a clean private business workspace.
     """
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = get_client_ip(request)
     if signup_limiter.is_rate_limited(client_ip):
         wait_sec = signup_limiter.get_remaining_seconds(client_ip)
         raise HTTPException(
             status_code=429,
-            detail=f"Too many registration attempts. Please try again in {max(1, wait_sec)} seconds."
+            detail=f"Too many registration attempts. Please try again in {max(1, wait_sec)} seconds.",
+            headers={"Retry-After": str(max(1, wait_sec))}
         )
 
     clean_name = (req.name or "").strip()
@@ -1560,7 +1457,7 @@ def register_user(req: UserRegisterRequest, request: Request, response: Response
 
 @app.post("/api/auth/login")
 def login_user(req: UserLoginRequest, request: Request, response: Response):
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = get_client_ip(request)
     clean_email = (req.email or "").strip().lower()
     raw_password = req.password or ""
 
@@ -1574,15 +1471,39 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
     rate_key = f"{client_ip}:{clean_email}"
     if login_limiter.is_rate_limited_key(rate_key):
         remaining = login_limiter.get_remaining_seconds(rate_key)
+        wait_min = max(1, remaining // 60)
         raise HTTPException(
             status_code=429,
-            detail=f"Too many failed login attempts for this account. Please try again in {max(1, remaining // 60)} minute{'s' if remaining > 60 else ''}."
+            detail=f"Too many failed login attempts for this account. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
+            headers={"Retry-After": str(max(1, remaining))}
         )
     if login_limiter.is_rate_limited_ip(client_ip):
         remaining = login_limiter.get_remaining_seconds(client_ip)
+        wait_min = max(1, remaining // 60)
         raise HTTPException(
             status_code=429,
-            detail=f"Too many failed login attempts. Please try again in {max(1, remaining // 60)} minute{'s' if remaining > 60 else ''}."
+            detail=f"Too many failed login attempts. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
+            headers={"Retry-After": str(max(1, remaining))}
+        )
+
+    # Atomically register attempt to prevent concurrent race conditions
+    acc_attempt = login_limiter.record_failure(rate_key)
+    ip_attempt = login_limiter.record_failure(client_ip)
+    if acc_attempt > login_limiter.max_attempts_per_key:
+        remaining = login_limiter.get_remaining_seconds(rate_key)
+        wait_min = max(1, remaining // 60)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed login attempts for this account. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
+            headers={"Retry-After": str(max(1, remaining))}
+        )
+    if ip_attempt > login_limiter.max_attempts_per_ip:
+        remaining = login_limiter.get_remaining_seconds(client_ip)
+        wait_min = max(1, remaining // 60)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed login attempts. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
+            headers={"Retry-After": str(max(1, remaining))}
         )
 
     # Retry loop with backoff for SQLite transient busy / lock conditions
@@ -1599,8 +1520,6 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
             user_row = cursor.fetchone()
 
             if not user_row:
-                login_limiter.record_failure(rate_key)
-                login_limiter.record_failure(client_ip)
                 raise HTTPException(status_code=401, detail="Invalid email or password.")
 
             user_dict = dict(user_row)
@@ -1617,8 +1536,6 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
                 )
 
             if not verify_password(raw_password, stored_hash):
-                login_limiter.record_failure(rate_key)
-                login_limiter.record_failure(client_ip)
                 raise HTTPException(status_code=401, detail="Invalid email or password.")
 
             # Reset rate limiting counter on success

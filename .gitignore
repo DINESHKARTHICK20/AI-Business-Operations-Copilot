@@ -49,6 +49,7 @@ pnpm-debug.log*
 
 # ─── 4. Python Virtual Environments ─────────────────────────
 .venv/
+.venv*/
 venv/
 env/
 ENV/

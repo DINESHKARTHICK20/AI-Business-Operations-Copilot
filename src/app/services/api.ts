@@ -396,6 +396,16 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
       throw new Error("Unable to connect to the backend server. Please verify the FastAPI backend is running and healthy.");
     }
 
+    if (res.status === 429) {
+      const retryAfter = res.headers.get("Retry-After");
+      const detail = errorJson?.detail || errorJson?.message;
+      if (detail) {
+        throw new Error(detail);
+      }
+      const retryText = retryAfter ? ` Please try again in ${retryAfter} seconds.` : " Please try again later.";
+      throw new Error(`Too many requests. You have been temporarily rate limited.${retryText}`);
+    }
+
     const errMsg =
       errorJson?.detail ||
       errorJson?.message ||

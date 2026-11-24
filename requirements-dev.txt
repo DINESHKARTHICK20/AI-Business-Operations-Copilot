@@ -1,0 +1,11 @@
+# AI Business Operations Copilot - Development & Testing Dependencies
+-r requirements.txt
+
+# Testing & Verification
+pytest==9.2.0
+httpx==0.28.1
+psutil==7.2.2
+
+# Dependency Audit & Packaging Tools
+pip-audit==2.10.1
+uv==0.13.9
