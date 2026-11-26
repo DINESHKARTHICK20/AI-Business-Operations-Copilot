@@ -1,21 +1,23 @@
 """
-SEC-08 Master Verification Suite: Persistent and Distributed Rate Limiting
-Tests all 15 required security scenarios:
+SEC-08 Master Verification Suite: Persistent and Distributed Rate Limiting (Hardened)
+Tests all 17 required security scenarios:
 1. Normal login succeeds.
-2. Repeated failed login attempts trigger rate limiting.
+2. Repeated failed login attempts trigger rate limiting (HTTP 429).
 3. Rate-limit counters persist across backend restarts.
 4. Multiple FastAPI worker processes share the same counters.
-5. Concurrent attempts cannot bypass configured limits.
+5. Concurrent attempts cannot bypass configured limits (atomic row lock / serialization).
 6. Expired rate limits reset correctly.
 7. Different account identifiers are handled appropriately.
 8. Different IP addresses are handled appropriately.
 9. Spoofed forwarding headers cannot bypass rate limits.
 10. HTTP 429 and Retry-After responses work correctly.
 11. Legitimate users are not permanently locked out.
-12. Expired rate-limit records are cleaned safely.
-13. Database failures do not silently disable authentication protection.
-14. No permanent test-data contamination occurs.
-15. Existing login and registration remain functional.
+12. Expired rate-limit records are cleaned safely (bounded cleanup with LIMIT).
+13. Database failures enforce Fail-Closed HTTP 503 and recover automatically.
+14. Distributed Brute-Force Botnet Protection (Tier 2 multi-IP account lockout).
+15. Rate-Limit Storage Security, Normalization & Oversized Inputs.
+16. No permanent test-data contamination occurs.
+17. Existing login and registration remain functional.
 """
 
 import os
@@ -40,6 +42,8 @@ from backend.rate_limiter import (
     login_limiter,
     signup_limiter,
     DistributedRateLimiter,
+    hash_identifier,
+    RateLimitStorageError,
 )
 from backend.ai_backend import app, hash_password
 from fastapi.testclient import TestClient
@@ -48,10 +52,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sec08_test")
 
 passed_tests = 0
-total_tests = 15
+total_tests = 17
 
 print("=" * 75)
-print("SEC-08: PERSISTENT AND DISTRIBUTED RATE LIMITING TEST SUITE")
+print("SEC-08: PERSISTENT AND DISTRIBUTED RATE LIMITING TEST SUITE (HARDENED)")
 print("=" * 75)
 
 
@@ -59,9 +63,9 @@ def cleanup_test_artifacts():
     """Remove all test keys and records from rate_limits and users."""
     try:
         with engine.begin() as conn:
-            conn.execute(text("DELETE FROM rate_limits WHERE rate_key LIKE '%sec08%' OR rate_key LIKE '%test%'"))
-            conn.execute(text("DELETE FROM user_sessions WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%sec08%')"))
-            conn.execute(text("DELETE FROM users WHERE email LIKE '%sec08%'"))
+            conn.execute(text("DELETE FROM rate_limits"))
+            conn.execute(text("DELETE FROM user_sessions WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%sec08%' OR email LIKE '%botnet%')"))
+            conn.execute(text("DELETE FROM users WHERE email LIKE '%sec08%' OR email LIKE '%botnet%'"))
     except Exception as e:
         logger.warning("Cleanup error: %s", e)
 
@@ -144,8 +148,8 @@ assert login_limiter.is_rate_limited_key(rate_key_restart), "Should be locked ou
 
 # "Restart": Re-instantiate a completely new limiter instance (simulating fresh process boot)
 fresh_limiter = DistributedRateLimiter(prefix="login", max_attempts=5, window_seconds=300)
-is_blocked = fresh_limiter.is_rate_limited(rate_key_restart, threshold=5)
-remaining = fresh_limiter.get_remaining_seconds(rate_key_restart)
+is_blocked = fresh_limiter.is_rate_limited(f"acc_ip:{rate_key_restart}", threshold=5)
+remaining = fresh_limiter.get_remaining_seconds(f"acc_ip:{rate_key_restart}")
 
 assert is_blocked, "Fresh limiter process did not see persisted lockout in MySQL!"
 assert remaining > 0, f"Remaining seconds must be > 0, got {remaining}"
@@ -175,7 +179,7 @@ try:
     # Wait for both workers to come up
     for port in (port_w1, port_w2):
         up = False
-        for _ in range(20):
+        for _ in range(25):
             try:
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1) as r:
                     if r.status == 200:
@@ -252,6 +256,7 @@ print("\n--- Test 5: Concurrent attempts cannot bypass configured limits ---")
 concurrent_email = "sec08_concurrent@example.com"
 login_limiter.reset(f"testclient:{concurrent_email}")
 login_limiter.reset("testclient")
+login_limiter.reset_account(concurrent_email)
 
 def send_login_attempt(idx):
     c = TestClient(app)
@@ -277,20 +282,29 @@ passed_tests += 1
 print("\n--- Test 6: Expired rate limits reset correctly ---")
 expired_key = "sec08_expired_test_key"
 past_time = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=60)
+full_expired_key = f"login:{hash_identifier(f'acc_ip:{expired_key}')}"
 
 with engine.begin() as conn:
-    conn.execute(
-        text("REPLACE INTO rate_limits (rate_key, attempts, first_attempt_at, last_attempt_at, expires_at, created_at, updated_at) "
-             "VALUES (:k, 5, :p, :p, :p, :p, :p)"),
-        {"k": f"login:{expired_key}", "p": past_time}
-    )
+    if is_mysql_mode():
+        conn.execute(
+            text("INSERT INTO rate_limits (rate_key, attempts, first_attempt_at, last_attempt_at, expires_at, created_at, updated_at) "
+                 "VALUES (:k, 5, :p, :p, :p, :p, :p) "
+                 "ON DUPLICATE KEY UPDATE attempts = 5, expires_at = :p"),
+            {"k": full_expired_key, "p": past_time}
+        )
+    else:
+        conn.execute(
+            text("REPLACE INTO rate_limits (rate_key, attempts, first_attempt_at, last_attempt_at, expires_at, created_at, updated_at) "
+                 "VALUES (:k, 5, :p, :p, :p, :p, :p)"),
+            {"k": full_expired_key, "p": past_time}
+        )
 
 # Check limiter: should NOT be rate limited because window expired
 assert not login_limiter.is_rate_limited_key(expired_key), "Expired key was incorrectly marked as rate-limited"
 assert login_limiter.get_remaining_seconds(expired_key) == 0, "Expired key had non-zero remaining seconds"
 
 # Recording a new attempt should reset attempts counter to 1
-new_count = login_limiter._backend.record_attempt(expired_key, window_seconds=300)
+new_count = login_limiter.record_failure(expired_key)
 assert new_count == 1, f"Expected attempts to reset to 1 after expiration, got {new_count}"
 print("PASS: Expired rate limit reset correctly to 1 attempt.")
 passed_tests += 1
@@ -341,6 +355,7 @@ key_legitimate = f"{ip_legitimate}:{shared_acc}"
 
 login_limiter.reset(key_attacker)
 login_limiter.reset(key_legitimate)
+login_limiter.reset_account(shared_acc)
 
 # Attacker fails 5 times
 for _ in range(5):
@@ -424,6 +439,7 @@ assert res_locked.status_code == 429
 rate_key_unblock = f"testclient:{unblock_email}"
 login_limiter.reset(rate_key_unblock)
 login_limiter.reset("testclient")
+login_limiter.reset_account(unblock_email)
 
 # Now authenticating with correct password MUST succeed
 res_recovered = client.post("/api/auth/login", json={"email": unblock_email, "password": unblock_pass})
@@ -444,18 +460,36 @@ future = now_utc + timedelta(hours=1)
 with engine.begin() as conn:
     # Insert 5 expired records
     for i in range(5):
-        conn.execute(
-            text("REPLACE INTO rate_limits (rate_key, attempts, first_attempt_at, last_attempt_at, expires_at, created_at, updated_at) "
-                 "VALUES (:k, 1, :p, :p, :p, :p, :p)"),
-            {"k": f"cleanup_test:expired_{i}", "p": past}
-        )
+        k = f"cleanup_test:expired_{i}"
+        if is_mysql_mode():
+            conn.execute(
+                text("INSERT INTO rate_limits (rate_key, attempts, first_attempt_at, last_attempt_at, expires_at, created_at, updated_at) "
+                     "VALUES (:k, 1, :p, :p, :p, :p, :p) "
+                     "ON DUPLICATE KEY UPDATE attempts = 1, expires_at = :p"),
+                {"k": k, "p": past}
+            )
+        else:
+            conn.execute(
+                text("REPLACE INTO rate_limits (rate_key, attempts, first_attempt_at, last_attempt_at, expires_at, created_at, updated_at) "
+                     "VALUES (:k, 1, :p, :p, :p, :p, :p)"),
+                {"k": k, "p": past}
+            )
     # Insert 2 active records
     for i in range(2):
-        conn.execute(
-            text("REPLACE INTO rate_limits (rate_key, attempts, first_attempt_at, last_attempt_at, expires_at, created_at, updated_at) "
-                 "VALUES (:k, 1, :n, :n, :f, :n, :n)"),
-            {"k": f"cleanup_test:active_{i}", "n": now_utc, "f": future}
-        )
+        k = f"cleanup_test:active_{i}"
+        if is_mysql_mode():
+            conn.execute(
+                text("INSERT INTO rate_limits (rate_key, attempts, first_attempt_at, last_attempt_at, expires_at, created_at, updated_at) "
+                     "VALUES (:k, 1, :n, :n, :f, :n, :n) "
+                     "ON DUPLICATE KEY UPDATE attempts = 1, expires_at = :f"),
+                {"k": k, "n": now_utc, "f": future}
+            )
+        else:
+            conn.execute(
+                text("REPLACE INTO rate_limits (rate_key, attempts, first_attempt_at, last_attempt_at, expires_at, created_at, updated_at) "
+                     "VALUES (:k, 1, :n, :n, :f, :n, :n)"),
+                {"k": k, "n": now_utc, "f": future}
+            )
 
 deleted = limiter_test.cleanup_expired(limit=10)
 assert deleted >= 5, f"Expected at least 5 expired rows deleted, got {deleted}"
@@ -471,39 +505,156 @@ passed_tests += 1
 
 
 # ============================================================
-# SCENARIO 13: Database failures do not silently disable protection
+# SCENARIO 13: Database failure handling (Fail-Closed HTTP 503 and Auto-Recovery)
 # ============================================================
-print("\n--- Test 13: Database failures do not silently disable protection (Fail-Secure) ---")
-fail_secure_limiter = DistributedRateLimiter(prefix="fail_test", max_attempts=3, window_seconds=60)
-mock_fail_key = "simulate_db_crash_user"
+print("\n--- Test 13: Database failures enforce Fail-Closed 503 and recover automatically ---")
+fail_user_email = "sec08_failclosed@example.com"
+fail_user_ip = "192.0.2.77"
+fail_key = f"{fail_user_ip}:{fail_user_email}"
 
-# Mock engine.connect and engine.begin to simulate database outage
-with patch("backend.rate_limiter.engine.connect", side_effect=Exception("Database connection failure [WinError 10061]")):
-    with patch("backend.rate_limiter.engine.begin", side_effect=Exception("Database connection failure [WinError 10061]")):
-        # Record attempts under simulated outage
-        for _ in range(3):
-            fail_secure_limiter.record_attempt(mock_fail_key)
+# Pre-record an attempt so we verify counter preservation
+login_limiter.reset(fail_key)
+login_limiter.record_failure(fail_key)
 
-        # Check limit under simulated outage
-        blocked = fail_secure_limiter.is_rate_limited(mock_fail_key, threshold=3)
-        rem = fail_secure_limiter.get_remaining_seconds(mock_fail_key, threshold=3)
+# Simulate database outage during login
+with patch("backend.rate_limiter.engine.connect", side_effect=Exception("MySQL server has gone away [CR_SERVER_GONE_ERROR]")):
+    with patch("backend.rate_limiter.engine.begin", side_effect=Exception("MySQL server has gone away [CR_SERVER_GONE_ERROR]")):
+        res_fail_login = client.post(
+            "/api/auth/login",
+            json={"email": fail_user_email, "password": "AnyPassword123!"}
+        )
+        assert res_fail_login.status_code == 503, f"Expected 503 on DB failure during login, got {res_fail_login.status_code}"
+        assert res_fail_login.headers.get("Retry-After") == "30", "Missing Retry-After: 30"
+        assert "temporarily unavailable" in res_fail_login.json()["detail"].lower()
 
-        assert blocked, "FAIL-OPEN DETECTED! Database outage allowed rate limit bypass!"
-        assert rem > 0, "Remaining seconds was 0 during fallback lockout"
+        # Simulate database outage during registration
+        res_fail_reg = client.post(
+            "/api/auth/register",
+            json={
+                "name": "Outage User",
+                "email": "outage_user@example.com",
+                "password": "OutagePassword123!@#",
+                "company": "Outage Corp"
+            }
+        )
+        assert res_fail_reg.status_code == 503, f"Expected 503 on DB failure during registration, got {res_fail_reg.status_code}"
+        assert res_fail_reg.headers.get("Retry-After") == "30"
 
-print("PASS: Database failure engaged in-memory fail-secure fallback; rate limiting remained active.")
+# Outage has ended. Verify automatic recovery and counter preservation:
+status_after_outage = login_limiter.get_status(fail_key)
+assert status_after_outage["attempts"] >= 1, "Shared counter was lost or silently reset after DB recovery!"
+
+# Normal login attempt resumes immediately without restart
+res_recovered = client.post(
+    "/api/auth/login",
+    json={"email": fail_user_email, "password": "WrongPasswordAfterOutage"}
+)
+assert res_recovered.status_code == 401, f"Expected 401 after recovery, got {res_recovered.status_code}"
+print("PASS: Database failure enforced fail-closed HTTP 503 with Retry-After: 30, preserved counters, and recovered automatically.")
 passed_tests += 1
 
 
 # ============================================================
-# SCENARIO 14: No permanent test-data contamination occurs
+# SCENARIO 14: Distributed Brute-Force Botnet Protection (Tier 2)
 # ============================================================
-print("\n--- Test 14: No permanent test-data contamination occurs ---")
+print("\n--- Test 14: Distributed Brute-Force Botnet Protection (Tier 2 Account-Level) ---")
+botnet_victim = "sec08_botnet_victim@example.com"
+botnet_pass = "Tr0ub4dor&3#SecureK9!"
+
+# Register victim user
+reg_victim = client.post("/api/auth/register", json={
+    "name": "Alice Henderson",
+    "email": botnet_victim,
+    "password": botnet_pass,
+    "company": "Victim Corp"
+})
+assert reg_victim.status_code == 200, f"Registration failed: {reg_victim.text}"
+
+# Reset counters for clean start
+login_limiter.reset_account(botnet_victim)
+
+# Simulate 15 distinct attacker IPs (e.g., botnet), each trying 1 failed attempt
+for i in range(1, 16):
+    bot_ip = f"198.51.100.{i}"
+    bot_client = TestClient(app, client=(bot_ip, 50000 + i))
+    res = bot_client.post(
+        "/api/auth/login",
+        json={"email": botnet_victim, "password": f"BotGuess_{i}"}
+    )
+    assert res.status_code == 401, f"Bot attempt {i} expected 401, got {res.status_code}"
+
+# Attempt 16 from a completely new bot IP (198.51.100.99):
+# Even though this new IP has 0 prior attempts, the ACCOUNT has exceeded 15 distributed attempts!
+bot_client_16 = TestClient(app, client=("198.51.100.99", 50099))
+res_bot_blocked = bot_client_16.post(
+    "/api/auth/login",
+    json={"email": botnet_victim, "password": "AnotherGuess"}
+)
+assert res_bot_blocked.status_code == 429, f"Expected 429 for distributed attack, got {res_bot_blocked.status_code}: {res_bot_blocked.text}"
+assert "multiple locations" in res_bot_blocked.json()["detail"].lower()
+
+# Verify user availability: a different account from that same IP (198.51.100.99) is NOT blocked!
+diff_email = "sec08_unrelated_target@example.com"
+res_diff_user = bot_client_16.post(
+    "/api/auth/login",
+    json={"email": diff_email, "password": "SomePassword123!"}
+)
+# Should be 401 (invalid creds), NOT 429!
+assert res_diff_user.status_code == 401, f"Unrelated account should NOT be blocked, got {res_diff_user.status_code}"
+
+# Verify recovery on legitimate login: reset account and verify valid login
+login_limiter.reset_account(botnet_victim)
+login_limiter.reset(f"198.51.100.99:{botnet_victim}")
+res_legit = bot_client_16.post(
+    "/api/auth/login",
+    json={"email": botnet_victim, "password": botnet_pass}
+)
+assert res_legit.status_code == 200, f"Legitimate login failed: {res_legit.text}"
+print("PASS: 15-IP distributed botnet attack triggered Tier 2 account lockout while preserving unrelated accounts.")
+passed_tests += 1
+
+
+# ============================================================
+# SCENARIO 15: Rate-Limit Storage Security, Normalization & Oversized Inputs
+# ============================================================
+print("\n--- Test 15: Storage security, key normalization, and oversized input handling ---")
+# 1. Malicious oversized email with 5,000 characters
+oversized_email = "a" * 5000 + "@malicious-payload-test.com"
+key_oversized = hash_identifier(oversized_email, prefix="acc_global")
+# Must produce a fixed-length key safely within VARCHAR(191)
+assert len(key_oversized) <= 48, f"Key length should be <= 48, got {len(key_oversized)}"
+assert key_oversized.startswith("acc_global:"), "Key missing prefix"
+
+# 2. Verify database insert with oversized input does NOT throw SQL VARCHAR overflow error
+res_oversized = client.post(
+    "/api/auth/login",
+    json={"email": oversized_email, "password": "SomePassword123!"}
+)
+# Should return 400 (regex rejection) or 401/429, NEVER 500 database error!
+assert res_oversized.status_code in (400, 401, 429), f"Oversized input caused unexpected status: {res_oversized.status_code}"
+
+# 3. Test key normalization (case and whitespace produce identical keys)
+h1 = hash_identifier("  User.Test@Example.COM  ")
+h2 = hash_identifier("user.test@example.com")
+assert h1 == h2, f"Key normalization failed: {h1} != {h2}"
+
+# 4. Test bounded storage capacity enforcement
+pruned = login_limiter._backend.enforce_storage_limits(max_records=100000)
+assert isinstance(pruned, int), "enforce_storage_limits failed to return integer"
+
+print("PASS: 5,000-char payloads safely hashed without SQL overflow; normalization and capacity enforcement verified.")
+passed_tests += 1
+
+
+# ============================================================
+# SCENARIO 16: No permanent test-data contamination occurs
+# ============================================================
+print("\n--- Test 16: No permanent test-data contamination occurs ---")
 cleanup_test_artifacts()
 
 with engine.connect() as conn:
-    remaining_rl = conn.execute(text("SELECT COUNT(*) FROM rate_limits WHERE rate_key LIKE '%sec08%' OR rate_key LIKE '%test%'")).scalar()
-    remaining_users = conn.execute(text("SELECT COUNT(*) FROM users WHERE email LIKE '%sec08%'")).scalar()
+    remaining_rl = conn.execute(text("SELECT COUNT(*) FROM rate_limits")).scalar()
+    remaining_users = conn.execute(text("SELECT COUNT(*) FROM users WHERE email LIKE '%sec08%' OR email LIKE '%botnet%'")).scalar()
 
 assert remaining_rl == 0, f"Found {remaining_rl} contaminated rate_limit records"
 assert remaining_users == 0, f"Found {remaining_users} contaminated user records"
@@ -512,9 +663,9 @@ passed_tests += 1
 
 
 # ============================================================
-# SCENARIO 15: Existing login and registration remain functional
+# SCENARIO 17: Existing login and registration remain functional
 # ============================================================
-print("\n--- Test 15: Existing login and registration remain functional ---")
+print("\n--- Test 17: Existing login and registration remain functional ---")
 legit_email = "clean_legit_user@example.com"
 legit_pass = "P@ssw0rdSecure!999#"
 
@@ -543,11 +694,13 @@ assert status_res.status_code == 200
 status_data = status_res.json()
 assert "ip_rate_limit" in status_data
 assert "account_rate_limit" in status_data
+assert "account_distributed_rate_limit" in status_data
 
 # Clean up legit test user
 with engine.begin() as conn:
     conn.execute(text("DELETE FROM user_sessions WHERE user_id = :uid"), {"uid": user_info["id"]})
     conn.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": user_info["id"]})
+    conn.execute(text("DELETE FROM rate_limits"))
 
 print("PASS: Core authentication, session issuance, and rate limit diagnostics fully functional.")
 passed_tests += 1

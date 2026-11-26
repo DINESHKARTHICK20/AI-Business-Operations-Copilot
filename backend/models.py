@@ -375,3 +375,25 @@ class RateLimit(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
+
+# ============================================================
+# 14. CONCURRENCY LEASES (SEC-09 DISTRIBUTED RESOURCE PROTECTION)
+# ============================================================
+class ConcurrencyLease(Base):
+    __tablename__ = "concurrency_leases"
+    __table_args__ = (
+        Index("idx_conc_res_user", "resource_type", "user_id"),
+        Index("idx_conc_expires", "expires_at"),
+        MYSQL_TABLE_ARGS,
+    )
+
+    lease_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    resource_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    worker_pid: Mapped[int] = mapped_column(Integer, nullable=False)
+    worker_host: Mapped[str] = mapped_column(String(128), nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+

@@ -406,6 +406,34 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
       throw new Error(`Too many requests. You have been temporarily rate limited.${retryText}`);
     }
 
+    if (res.status === 413) {
+      const detail = errorJson?.detail || errorJson?.message;
+      throw new Error(detail || "Request payload is too large. Please reduce the data size and try again.");
+    }
+
+    if (res.status === 422) {
+      if (Array.isArray(errorJson?.detail)) {
+        const issues = errorJson.detail.map((d: any) => d.msg || JSON.stringify(d)).join("; ");
+        throw new Error(`Validation Error: ${issues}`);
+      }
+      throw new Error(errorJson?.detail || errorJson?.message || "Invalid input parameters. Please check your inputs.");
+    }
+
+    if (res.status === 503) {
+      const retryAfter = res.headers.get("Retry-After");
+      const detail = errorJson?.detail || errorJson?.message;
+      if (detail) {
+        const retrySuffix = retryAfter && !detail.includes("second") ? ` Please retry in ${retryAfter} seconds.` : "";
+        throw new Error(`${detail}${retrySuffix}`);
+      }
+      const retryText = retryAfter ? ` Please retry in ${retryAfter} seconds.` : " Please try again shortly.";
+      throw new Error(`Service temporarily unavailable.${retryText}`);
+    }
+
+    if (res.status === 504) {
+      throw new Error("The request timed out on the server. Please try again with a smaller query or payload.");
+    }
+
     const errMsg =
       errorJson?.detail ||
       errorJson?.message ||
@@ -463,8 +491,12 @@ export const api = {
   },
 
   // Customers
-  async getCustomers(): Promise<Customer[]> {
-    return request<Customer[]>("/api/customers");
+  async getCustomers(limit: number = 500, offset: number = 0): Promise<Customer[]> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.append("limit", String(limit));
+    if (offset !== undefined) params.append("offset", String(offset));
+    const qs = params.toString();
+    return request<Customer[]>(`/api/customers${qs ? `?${qs}` : ""}`);
   },
 
   async createCustomer(customer: Partial<Customer>): Promise<Customer> {
@@ -508,8 +540,12 @@ export const api = {
   },
 
   // Employees
-  async getEmployees(): Promise<Employee[]> {
-    return request<Employee[]>("/api/employees");
+  async getEmployees(limit: number = 500, offset: number = 0): Promise<Employee[]> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.append("limit", String(limit));
+    if (offset !== undefined) params.append("offset", String(offset));
+    const qs = params.toString();
+    return request<Employee[]>(`/api/employees${qs ? `?${qs}` : ""}`);
   },
 
   async createEmployee(employee: Partial<Employee>): Promise<Employee> {
@@ -533,8 +569,12 @@ export const api = {
   },
 
   // Inventory / Products
-  async getInventory(): Promise<Product[]> {
-    return request<Product[]>("/api/inventory");
+  async getInventory(limit: number = 500, offset: number = 0): Promise<Product[]> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.append("limit", String(limit));
+    if (offset !== undefined) params.append("offset", String(offset));
+    const qs = params.toString();
+    return request<Product[]>(`/api/inventory${qs ? `?${qs}` : ""}`);
   },
 
   async createProduct(product: Partial<Product>): Promise<Product> {
@@ -589,8 +629,12 @@ export const api = {
   },
 
   // Invoices
-  async getInvoices(): Promise<Invoice[]> {
-    return request<Invoice[]>("/api/invoices");
+  async getInvoices(limit: number = 500, offset: number = 0): Promise<Invoice[]> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.append("limit", String(limit));
+    if (offset !== undefined) params.append("offset", String(offset));
+    const qs = params.toString();
+    return request<Invoice[]>(`/api/invoices${qs ? `?${qs}` : ""}`);
   },
 
   async getInvoice(id: string): Promise<Invoice> {
@@ -700,8 +744,12 @@ export const api = {
   },
 
   // Notifications
-  async getNotifications(): Promise<NotificationItem[]> {
-    return request<NotificationItem[]>("/api/notifications");
+  async getNotifications(limit: number = 500, offset: number = 0): Promise<NotificationItem[]> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.append("limit", String(limit));
+    if (offset !== undefined) params.append("offset", String(offset));
+    const qs = params.toString();
+    return request<NotificationItem[]>(`/api/notifications${qs ? `?${qs}` : ""}`);
   },
 
   async markAllNotificationsRead(): Promise<{ status: string }> {

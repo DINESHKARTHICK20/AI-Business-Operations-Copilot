@@ -87,7 +87,12 @@ if IS_MYSQL:
         pool_pre_ping=True,       # Health-checks connections before checkout
         pool_recycle=1800,        # Recycles idle connections every 30 minutes (prevents MySQL 8h timeout)
         pool_timeout=30,          # 30 second checkout timeout
-        connect_args={"charset": "utf8mb4"},
+        connect_args={
+            "charset": "utf8mb4",
+            "connect_timeout": int(os.environ.get("DB_CONNECT_TIMEOUT", "10")),
+            "read_timeout": int(os.environ.get("DB_READ_TIMEOUT", "30")),
+            "write_timeout": int(os.environ.get("DB_WRITE_TIMEOUT", "30")),
+        },
         echo=False
     )
     logger.info("Configured MySQL database engine with QueuePool (InnoDB, utf8mb4).")

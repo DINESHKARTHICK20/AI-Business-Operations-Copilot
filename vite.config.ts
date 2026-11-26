@@ -38,11 +38,25 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     strictPort: true,
+    headers: {
+      'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' ws://localhost:5173 ws://127.0.0.1:5173 http://localhost:5173 http://127.0.0.1:5173 http://localhost:8000 http://127.0.0.1:8000; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self';",
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+    },
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            // Overwrite client-provided X-Forwarded-For to prevent IP spoofing through the proxy
+            const socketIp = req.socket?.remoteAddress || '127.0.0.1';
+            proxyReq.setHeader('x-forwarded-for', socketIp);
+            proxyReq.setHeader('x-forwarded-proto', 'http');
+            proxyReq.setHeader('x-forwarded-host', req.headers.host || 'localhost:5173');
+          });
           proxy.on('error', (_err, _req, res) => {
             if (res && 'writeHead' in res && !res.headersSent) {
               res.writeHead(502, { 'Content-Type': 'application/json' });
@@ -58,6 +72,10 @@ export default defineConfig({
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            const socketIp = req.socket?.remoteAddress || '127.0.0.1';
+            proxyReq.setHeader('x-forwarded-for', socketIp);
+          });
           proxy.on('error', (_err, _req, res) => {
             if (res && 'writeHead' in res && !res.headersSent) {
               res.writeHead(502, { 'Content-Type': 'application/json' });
@@ -82,6 +100,18 @@ export default defineConfig({
   },
 
   base: '/',
+  preview: {
+    host: '127.0.0.1',
+    port: 5173,
+    strictPort: true,
+    headers: {
+      'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self';",
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+    },
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,

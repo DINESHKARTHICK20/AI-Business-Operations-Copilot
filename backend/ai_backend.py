@@ -1,5 +1,6 @@
 import os
 import time
+import asyncio
 from pathlib import Path
 import sys
 import math
@@ -22,11 +23,13 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
+import math
+import threading
 from fastapi import FastAPI, HTTPException, Query, Header, Depends, Request, Response
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import (
     accuracy_score, mean_absolute_error, mean_squared_error, r2_score,
@@ -50,20 +53,70 @@ logger = logging.getLogger("bizops.auth")
 SECRET_KEY = os.environ.get("SECRET_KEY", "bizops_prod_secret_key_change_in_production_2026")
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").strip().lower()
 IS_PRODUCTION = ENVIRONMENT == "production"
-SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true" or IS_PRODUCTION
 
-_env_origins = os.environ.get("ALLOWED_ORIGINS", "")
-if _env_origins:
-    ALLOWED_ORIGINS = [o.strip() for o in _env_origins.split(",") if o.strip()]
-else:
-    ALLOWED_ORIGINS = [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000"
-    ]
+def is_session_cookie_secure(request: Optional[Request] = None) -> bool:
+    sec_env = os.environ.get("SESSION_COOKIE_SECURE", "").strip().lower()
+    if sec_env in ("false", "0", "no"):
+        return False
+    if sec_env in ("true", "1", "yes"):
+        return True
+    env = os.environ.get("ENVIRONMENT", "development").strip().lower()
+    if env == "production":
+        if request is not None:
+            return is_request_https(request)
+        return True
+    return False
+
+class _SessionCookieSecureProxy:
+    def __bool__(self):
+        return is_session_cookie_secure()
+    def __repr__(self):
+        return str(is_session_cookie_secure())
+
+SESSION_COOKIE_SECURE = _SessionCookieSecureProxy()
+
+DEV_DEFAULT_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000"
+]
+
+def get_allowed_origins() -> List[str]:
+    """
+    Get allowed CORS origins based on environment (SEC-10).
+    - In Development: only explicitly required local origins are permitted.
+    - In Production: requires explicit CORS_ALLOWED_ORIGINS or ALLOWED_ORIGINS allowlist.
+      Wildcard '*' is forbidden with credentialed requests in production.
+      'null' origin is forbidden.
+      Localhost origins are NOT automatically trusted in production.
+      If unconfigured or empty in production, returns [] (fail safe / reject all cross-origin).
+    """
+    env = os.environ.get("ENVIRONMENT", "development").strip().lower()
+    is_prod = env == "production"
+    env_origins_str = os.environ.get("CORS_ALLOWED_ORIGINS", os.environ.get("ALLOWED_ORIGINS", "")).strip()
+
+    if is_prod:
+        if not env_origins_str:
+            return []
+        origins = []
+        for o in env_origins_str.split(","):
+            cleaned = o.strip()
+            if not cleaned or cleaned == "*" or cleaned.lower() == "null":
+                continue
+            origins.append(cleaned)
+        return origins
+    else:
+        if env_origins_str:
+            custom_dev = [
+                o.strip() for o in env_origins_str.split(",")
+                if o.strip() and o.strip() != "*" and o.strip().lower() != "null"
+            ]
+            if custom_dev:
+                return custom_dev
+        return list(DEV_DEFAULT_ORIGINS)
+
+ALLOWED_ORIGINS = get_allowed_origins()
 
 
 # ============================================================
@@ -524,28 +577,280 @@ app = FastAPI(
     openapi_url=openapi_url
 )
 
+class HardenedCORSMiddleware(CORSMiddleware):
+    """
+    Environment-aware hardened CORS middleware (SEC-10).
+    - Dynamically queries get_allowed_origins() to support environment configuration.
+    - Strictly rejects 'null', '*', and unallowed origins.
+    - Fails safely in production when no allowlist is configured.
+    """
+    def is_allowed_origin(self, origin: str) -> bool:
+        if not origin or origin.lower() == "null" or origin == "*":
+            return False
+        return origin in get_allowed_origins()
+
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    HardenedCORSMiddleware,
+    allow_origins=DEV_DEFAULT_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"]
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=["Content-Type", "X-CSRF-Token", "X-XSRF-Token", "Authorization", "Accept", "X-Requested-With"],
+    expose_headers=["Retry-After", "Content-Disposition", "X-CSRF-Token"]
 )
+
+
+# ============================================================
+# HTTP SECURITY HEADERS & CONTENT SECURITY POLICY (SEC-10)
+# ============================================================
+
+def is_request_https(request: Request) -> bool:
+    """
+    Safely determine if the request is over HTTPS (SEC-10).
+    1. Direct connection scheme is https.
+    2. Direct connection originates from an explicitly trusted reverse proxy (e.g. 127.0.0.1, Nginx)
+       AND the X-Forwarded-Proto header is 'https'.
+    Direct connections from untrusted clients are never permitted to spoof X-Forwarded-Proto.
+    """
+    if request.url.scheme == "https":
+        return True
+    direct_ip = request.client.host if request.client else "127.0.0.1"
+    try:
+        from backend.rate_limiter import get_trusted_proxies
+        trusted = get_trusted_proxies()
+    except Exception:
+        trusted = {"127.0.0.1", "::1"}
+    if direct_ip in trusted or direct_ip in ("127.0.0.1", "::1", "localhost", "testclient"):
+        proto = request.headers.get("x-forwarded-proto", "").strip().lower()
+        if proto == "https":
+            return True
+    return False
+
+
+def should_enable_hsts(request: Request) -> bool:
+    """
+    HSTS (Strict-Transport-Security) MUST ONLY be emitted when:
+    1. In production OR ENABLE_HSTS is explicitly enabled, AND
+    2. The actual request is genuinely HTTPS (RFC 6797 requirement).
+    Never send HSTS over plain HTTP or on local development.
+    """
+    env = os.environ.get("ENVIRONMENT", "development").strip().lower()
+    enable_hsts = (env == "production" or os.environ.get("ENABLE_HSTS", "false").lower() == "true")
+    if not enable_hsts:
+        return False
+    return is_request_https(request)
+
+
+def get_csp_header(request: Request) -> str:
+    """
+    Generate environment-appropriate Content-Security-Policy (SEC-10).
+    Audited resource requirements:
+    - Scripts: React, Vite, Lucide icons, Recharts
+    - Styles: Tailwind CSS, Google Fonts (fonts.googleapis.com), inline styles for UI state
+    - Fonts: Google Fonts (fonts.gstatic.com), local fonts, data:
+    - Images: Local assets, data:, blob: (PDF/canvas), https:
+    - Connect: API endpoints, and in dev Vite HMR WebSocket (ws://localhost:5173, etc.)
+    - Objects: 'none' (PDFs rendered/downloaded via PyMuPDF binary blob)
+    - Frames: 'none' (DENY clickjacking)
+    - Base URI: 'self'
+    - Form action: 'self'
+    """
+    env = os.environ.get("ENVIRONMENT", "development").strip().lower()
+    is_prod = env == "production"
+
+    if is_prod:
+        # Strict production CSP: no unsafe-inline or unsafe-eval for scripts
+        allowed_origins = get_allowed_origins()
+        connect_extra = " ".join([o for o in allowed_origins if o.startswith("http")])
+        connect_src = f"'self' {connect_extra}".strip()
+        return (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com data:; "
+            "img-src 'self' data: blob:; "
+            f"connect-src {connect_src}; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "frame-ancestors 'none'; "
+            "form-action 'self';"
+        )
+    else:
+        # Development CSP: allows Vite HMR WebSockets and local dev servers
+        return (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com data:; "
+            "img-src 'self' data: blob:; "
+            "connect-src 'self' ws://localhost:5173 ws://127.0.0.1:5173 http://localhost:5173 http://127.0.0.1:5173 http://localhost:8000 http://127.0.0.1:8000; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "frame-ancestors 'none'; "
+            "form-action 'self';"
+        )
+
+
+def apply_cache_control_headers(response: Response, request: Request) -> None:
+    """
+    Apply appropriate Cache-Control headers based on request route (SEC-10).
+    - API endpoints (/api/*): must never be stored by shared or public caches.
+      Cache-Control: no-store, no-cache, must-revalidate, private
+      Pragma: no-cache
+    - Static hashed assets (/assets/*): long-term immutable caching.
+      Cache-Control: public, max-age=31536000, immutable
+    - HTML SPA documents (/, index.html): must revalidate.
+      Cache-Control: no-cache, must-revalidate
+    """
+    path = request.url.path
+    if path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+        response.headers["Pragma"] = "no-cache"
+    elif path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif path in ("/", "/index.html") or response.headers.get("content-type", "").startswith("text/html"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+
+
+def apply_security_headers(response: Response, request: Request) -> Response:
+    """Apply complete suite of HTTP security headers to any Response (SEC-10)."""
+    response.headers["Content-Security-Policy"] = get_csp_header(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+
+    if should_enable_hsts(request):
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    elif "Strict-Transport-Security" in response.headers:
+        del response.headers["Strict-Transport-Security"]
+
+    apply_cache_control_headers(response, request)
+    return response
+
+
+# ============================================================
+# RESOURCE PROTECTION & CONCURRENCY LIMITING (SEC-09)
+# ============================================================
+
+MAX_REQUEST_BODY_SIZE = int(os.environ.get("MAX_REQUEST_BODY_SIZE", str(1024 * 1024))) # 1MB
+BODY_RECEIVE_TIMEOUT = float(os.environ.get("BODY_RECEIVE_TIMEOUT", "15.0"))
+MAX_CONCURRENT_BODY_BUFFERS = int(os.environ.get("MAX_CONCURRENT_BODY_BUFFERS", "32"))
+body_buffer_semaphore = asyncio.Semaphore(MAX_CONCURRENT_BODY_BUFFERS)
+
+from backend.concurrency import (
+    DistributedConcurrencyGuard,
+    local_process_semaphore,
+    run_with_execution_timeout,
+)
+
+ConcurrencyGuard = DistributedConcurrencyGuard
+expensive_operation_semaphore = local_process_semaphore
+
+
+@app.middleware("http")
+async def enforce_payload_size_limit(request: Request, call_next):
+    # Enforce request payload size limit to prevent memory exhaustion (SEC-09)
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            cl_bytes = int(content_length)
+            if cl_bytes > MAX_REQUEST_BODY_SIZE:
+                logger.warning(
+                    "Payload size limit exceeded: %d bytes (max %d bytes) on %s %s",
+                    cl_bytes, MAX_REQUEST_BODY_SIZE, request.method, request.url.path
+                )
+                err_resp = JSONResponse(
+                    status_code=413,
+                    content={
+                        "status": "error",
+                        "detail": f"Request payload exceeds maximum permitted size of {MAX_REQUEST_BODY_SIZE // (1024*1024)}MB.",
+                        "message": f"Request payload exceeds maximum permitted size of {MAX_REQUEST_BODY_SIZE // (1024*1024)}MB."
+                    }
+                )
+                return apply_security_headers(err_resp, request)
+        except ValueError:
+            pass
+    
+    if request.method in ("POST", "PUT", "PATCH"):
+        # Bounded concurrent body buffers
+        try:
+            await asyncio.wait_for(body_buffer_semaphore.acquire(), timeout=5.0)
+        except asyncio.TimeoutError:
+            err_resp = JSONResponse(
+                status_code=503,
+                content={
+                    "status": "error",
+                    "detail": "Server is currently experiencing high load buffering request uploads. Please retry shortly.",
+                    "message": "Server is currently experiencing high load buffering request uploads. Please retry shortly."
+                },
+                headers={"Retry-After": "5"}
+            )
+            return apply_security_headers(err_resp, request)
+
+        try:
+            body_chunks = []
+
+            async def read_stream():
+                total_read = 0
+                async for chunk in request.stream():
+                    total_read += len(chunk)
+                    if total_read > MAX_REQUEST_BODY_SIZE:
+                        # Free accumulated chunks immediately upon exceeding 1 MB limit
+                        body_chunks.clear()
+                        return None, True
+                    body_chunks.append(chunk)
+                return b"".join(body_chunks), False
+
+            try:
+                raw_body, exceeded = await asyncio.wait_for(read_stream(), timeout=BODY_RECEIVE_TIMEOUT)
+            except asyncio.TimeoutError:
+                body_chunks.clear()
+                logger.warning(
+                    "Slow request body delivery timed out (> %.1fs) on %s %s",
+                    BODY_RECEIVE_TIMEOUT, request.method, request.url.path
+                )
+                err_resp = JSONResponse(
+                    status_code=408,
+                    content={
+                        "status": "error",
+                        "detail": f"Request Timeout: Request body delivery exceeded deadline of {BODY_RECEIVE_TIMEOUT}s.",
+                        "message": f"Request Timeout: Request body delivery exceeded deadline of {BODY_RECEIVE_TIMEOUT}s."
+                    },
+                    headers={"Connection": "close"}
+                )
+                return apply_security_headers(err_resp, request)
+
+            if exceeded:
+                body_chunks.clear()
+                err_resp = JSONResponse(
+                    status_code=413,
+                    content={
+                        "status": "error",
+                        "detail": f"Request payload exceeds maximum permitted size of {MAX_REQUEST_BODY_SIZE // (1024*1024)}MB.",
+                        "message": f"Request payload exceeds maximum permitted size of {MAX_REQUEST_BODY_SIZE // (1024*1024)}MB."
+                    },
+                    headers={"Connection": "close"}
+                )
+                return apply_security_headers(err_resp, request)
+
+            request._body = raw_body or b""
+            body_chunks.clear()
+        finally:
+            body_buffer_semaphore.release()
+
+    return await call_next(request)
 
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     try:
         response = await call_next(request)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        if SESSION_COOKIE_SECURE:
-            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        return response
+    except HTTPException as http_exc:
+        response = JSONResponse(
+            status_code=http_exc.status_code,
+            content={"detail": http_exc.detail, "message": http_exc.detail},
+            headers=getattr(http_exc, "headers", None)
+        )
     except Exception as exc:
         logger.error(
             "Unhandled server exception on %s %s: %s",
@@ -554,7 +859,7 @@ async def add_security_headers(request: Request, call_next):
             exc,
             exc_info=True
         )
-        return JSONResponse(
+        response = JSONResponse(
             status_code=500,
             content={
                 "status": "error",
@@ -562,6 +867,7 @@ async def add_security_headers(request: Request, call_next):
                 "detail": "An unexpected server error occurred. Please try again."
             }
         )
+    return apply_security_headers(response, request)
 
 
 @app.exception_handler(Exception)
@@ -573,7 +879,7 @@ async def global_unhandled_exception_handler(request: Request, exc: Exception):
         exc,
         exc_info=True
     )
-    return JSONResponse(
+    resp = JSONResponse(
         status_code=500,
         content={
             "status": "error",
@@ -581,6 +887,7 @@ async def global_unhandled_exception_handler(request: Request, exc: Exception):
             "detail": "An unexpected server error occurred. Please try again later."
         }
     )
+    return apply_security_headers(resp, request)
 
 
 # Static Assets Mount for Built Frontend (Vite)
@@ -789,26 +1096,44 @@ if "metrics" not in inventory_bundle:
 # ============================================================
 
 class ChurnRequest(BaseModel):
-    total_orders: int = Field(ge=0)
-    total_spend: float = Field(ge=0)
-    days_since_last_purchase: int = Field(ge=0)
-    support_tickets: int = Field(ge=0)
-    complaints: int = Field(ge=0)
-    average_order_value: float = Field(ge=0)
+    total_orders: int = Field(ge=0, le=1000000)
+    total_spend: float = Field(ge=0, le=1000000000.0)
+    days_since_last_purchase: int = Field(ge=0, le=36500)
+    support_tickets: int = Field(ge=0, le=10000)
+    complaints: int = Field(ge=0, le=10000)
+    average_order_value: float = Field(ge=0, le=100000000.0)
+
+    @validator("total_spend", "average_order_value")
+    def validate_finite_churn_floats(cls, v):
+        if not math.isfinite(v):
+            raise ValueError("Financial amounts must be finite numbers")
+        return v
 
 
 class SalesRequest(BaseModel):
-    month_index: int = Field(ge=1)
-    orders: int = Field(ge=0)
-    marketing_spend: float = Field(ge=0)
+    month_index: int = Field(ge=1, le=1200)
+    orders: int = Field(ge=0, le=1000000)
+    marketing_spend: float = Field(ge=0, le=1000000000.0)
+
+    @validator("marketing_spend")
+    def validate_finite_sales_floats(cls, v):
+        if not math.isfinite(v):
+            raise ValueError("Marketing spend must be a finite number")
+        return v
 
 
 class InventoryRequest(BaseModel):
-    avg_daily_demand: float = Field(gt=0)
-    trend: float = 0
-    promotion_factor: float = Field(ge=0)
-    current_stock: float = Field(ge=0)
-    reorder_level: float = Field(ge=0)
+    avg_daily_demand: float = Field(gt=0, le=1000000.0)
+    trend: float = Field(ge=-10.0, le=10.0)
+    promotion_factor: float = Field(ge=0, le=100.0)
+    current_stock: float = Field(ge=0, le=10000000.0)
+    reorder_level: float = Field(ge=0, le=10000000.0)
+
+    @validator("avg_daily_demand", "trend", "promotion_factor", "current_stock", "reorder_level")
+    def validate_finite_inv_floats(cls, v):
+        if not math.isfinite(v):
+            raise ValueError("Inventory metrics must be finite numbers")
+        return v
 
 
 class CustomerCreate(BaseModel):
@@ -919,7 +1244,7 @@ class InvoiceStatusUpdate(BaseModel):
 
 
 class CopilotChatRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=2000, description="Chat message must be between 1 and 2000 characters")
 
 
 class UserRegisterRequest(BaseModel):
@@ -984,6 +1309,17 @@ from backend.rate_limiter import (
     LoginRateLimiter,
     SignupRateLimiter,
     DistributedRateLimiter,
+    RateLimitStorageError,
+    copilot_limiter,
+    churn_limiter,
+    sales_limiter,
+    inventory_limiter,
+    health_limiter,
+    action_center_limiter,
+    pdf_limiter,
+    report_limiter,
+    search_limiter,
+    analytics_limiter,
 )
 
 
@@ -1331,20 +1667,30 @@ def get_rate_limit_status(request: Request, email: Optional[str] = Query(default
     Optionally pass ?email=user@example.com to check the per-account lockout too.
     """
     client_ip = get_client_ip(request)
-    ip_status = login_limiter.get_status(client_ip, threshold=login_limiter.max_attempts_per_ip)
+    try:
+        ip_status = login_limiter.get_status(client_ip, threshold=login_limiter.max_attempts_per_ip)
 
-    result = {
-        "ip": client_ip,
-        "ip_rate_limit": ip_status,
-    }
+        result = {
+            "ip": client_ip,
+            "ip_rate_limit": ip_status,
+        }
 
-    if email:
-        clean_email = email.strip().lower()
-        rate_key = f"{client_ip}:{clean_email}"
-        key_status = login_limiter.get_status(rate_key, threshold=login_limiter.max_attempts_per_key)
-        result["account_rate_limit"] = key_status
+        if email:
+            clean_email = email.strip().lower()
+            rate_key = f"{client_ip}:{clean_email}"
+            key_status = login_limiter.get_status(rate_key, threshold=login_limiter.max_attempts_per_key)
+            acc_global_status = login_limiter.get_status_account(clean_email)
+            result["account_rate_limit"] = key_status
+            result["account_distributed_rate_limit"] = acc_global_status
 
-    return result
+        return result
+    except RateLimitStorageError as rse:
+        logger.error("Rate limit storage error during status check: %s", rse)
+        raise HTTPException(
+            status_code=503,
+            detail="Rate limit diagnostic service is temporarily unavailable. Please try again shortly.",
+            headers={"Retry-After": "30"}
+        )
 
 
 @app.post("/api/auth/register")
@@ -1359,12 +1705,23 @@ def register_user(req: UserRegisterRequest, request: Request, response: Response
     and initializes a clean private business workspace.
     """
     client_ip = get_client_ip(request)
-    if signup_limiter.is_rate_limited(client_ip):
-        wait_sec = signup_limiter.get_remaining_seconds(client_ip)
+    try:
+        if signup_limiter.is_rate_limited(client_ip):
+            wait_sec = signup_limiter.get_remaining_seconds(client_ip)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many registration attempts. Please try again in {max(1, wait_sec)} seconds.",
+                headers={"Retry-After": str(max(1, wait_sec))}
+            )
+        signup_limiter.record_attempt(client_ip)
+    except HTTPException:
+        raise
+    except RateLimitStorageError as rse:
+        logger.critical("Rate limit storage unavailable during registration: %s. Enforcing fail-closed 503.", rse)
         raise HTTPException(
-            status_code=429,
-            detail=f"Too many registration attempts. Please try again in {max(1, wait_sec)} seconds.",
-            headers={"Retry-After": str(max(1, wait_sec))}
+            status_code=503,
+            detail="Registration service is temporarily unavailable due to database maintenance. Please try again shortly.",
+            headers={"Retry-After": "30"}
         )
 
     clean_name = (req.name or "").strip()
@@ -1377,8 +1734,6 @@ def register_user(req: UserRegisterRequest, request: Request, response: Response
         raise HTTPException(status_code=400, detail="Name is required.")
     if not clean_email or not EMAIL_REGEX.match(clean_email):
         raise HTTPException(status_code=400, detail="Please enter a valid email address.")
-    
-    signup_limiter.record_attempt(client_ip)
 
     conn = get_db()
     cursor = conn.cursor()
@@ -1469,41 +1824,69 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
         raise HTTPException(status_code=400, detail="Password is required.")
 
     rate_key = f"{client_ip}:{clean_email}"
-    if login_limiter.is_rate_limited_key(rate_key):
-        remaining = login_limiter.get_remaining_seconds(rate_key)
-        wait_min = max(1, remaining // 60)
-        raise HTTPException(
-            status_code=429,
-            detail=f"Too many failed login attempts for this account. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
-            headers={"Retry-After": str(max(1, remaining))}
-        )
-    if login_limiter.is_rate_limited_ip(client_ip):
-        remaining = login_limiter.get_remaining_seconds(client_ip)
-        wait_min = max(1, remaining // 60)
-        raise HTTPException(
-            status_code=429,
-            detail=f"Too many failed login attempts. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
-            headers={"Retry-After": str(max(1, remaining))}
-        )
+    try:
+        if login_limiter.is_rate_limited_key(rate_key):
+            remaining = login_limiter.get_remaining_seconds(rate_key)
+            wait_min = max(1, remaining // 60)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many failed login attempts for this account. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
+                headers={"Retry-After": str(max(1, remaining))}
+            )
+        if login_limiter.is_rate_limited_account(clean_email):
+            remaining = login_limiter.get_remaining_seconds_account(clean_email)
+            wait_min = max(1, remaining // 60)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many failed login attempts for this account across multiple locations. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
+                headers={"Retry-After": str(max(1, remaining))}
+            )
+        if login_limiter.is_rate_limited_ip(client_ip):
+            remaining = login_limiter.get_remaining_seconds(client_ip)
+            wait_min = max(1, remaining // 60)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many failed login attempts. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
+                headers={"Retry-After": str(max(1, remaining))}
+            )
 
-    # Atomically register attempt to prevent concurrent race conditions
-    acc_attempt = login_limiter.record_failure(rate_key)
-    ip_attempt = login_limiter.record_failure(client_ip)
-    if acc_attempt > login_limiter.max_attempts_per_key:
-        remaining = login_limiter.get_remaining_seconds(rate_key)
-        wait_min = max(1, remaining // 60)
+        # Atomically register attempt to prevent concurrent race conditions
+        acc_attempt = login_limiter.record_failure(rate_key)
+        acc_global_attempt = login_limiter.record_account_failure(clean_email)
+        ip_attempt = login_limiter.record_failure(client_ip)
+
+        if acc_attempt > login_limiter.max_attempts_per_key:
+            remaining = login_limiter.get_remaining_seconds(rate_key)
+            wait_min = max(1, remaining // 60)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many failed login attempts for this account. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
+                headers={"Retry-After": str(max(1, remaining))}
+            )
+        if acc_global_attempt > login_limiter.max_attempts_per_account:
+            remaining = login_limiter.get_remaining_seconds_account(clean_email)
+            wait_min = max(1, remaining // 60)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many failed login attempts for this account across multiple locations. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
+                headers={"Retry-After": str(max(1, remaining))}
+            )
+        if ip_attempt > login_limiter.max_attempts_per_ip:
+            remaining = login_limiter.get_remaining_seconds(client_ip)
+            wait_min = max(1, remaining // 60)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many failed login attempts. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
+                headers={"Retry-After": str(max(1, remaining))}
+            )
+    except HTTPException:
+        raise
+    except RateLimitStorageError as rse:
+        logger.critical("Rate limit storage unavailable during login: %s. Enforcing fail-closed 503.", rse)
         raise HTTPException(
-            status_code=429,
-            detail=f"Too many failed login attempts for this account. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
-            headers={"Retry-After": str(max(1, remaining))}
-        )
-    if ip_attempt > login_limiter.max_attempts_per_ip:
-        remaining = login_limiter.get_remaining_seconds(client_ip)
-        wait_min = max(1, remaining // 60)
-        raise HTTPException(
-            status_code=429,
-            detail=f"Too many failed login attempts. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
-            headers={"Retry-After": str(max(1, remaining))}
+            status_code=503,
+            detail="Authentication service is temporarily unavailable due to database maintenance. Please try again shortly.",
+            headers={"Retry-After": "30"}
         )
 
     # Retry loop with backoff for SQLite transient busy / lock conditions
@@ -1541,6 +1924,7 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
             # Reset rate limiting counter on success
             login_limiter.reset(rate_key)
             login_limiter.reset(client_ip)
+            login_limiter.reset_account(clean_email)
 
             # Upgrade to bcrypt if stored hash is legacy format
             if not stored_hash.startswith(("$2b$", "$2a$", "$2y$")):
@@ -1734,11 +2118,15 @@ def logout_user(request: Request, response: Response):
 # ============================================================
 
 @app.get("/api/customers")
-def get_customers(user: dict = Depends(get_authenticated_user)):
+def get_customers(
+    limit: int = Query(default=100, ge=1, le=500, description="Maximum number of customer records to return"),
+    offset: int = Query(default=0, ge=0, description="Offset for pagination"),
+    user: dict = Depends(get_authenticated_user)
+):
     conn = get_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT * FROM customers WHERE user_id = ? ORDER BY id ASC", (user["id"],))
+        cursor.execute("SELECT * FROM customers WHERE user_id = ? ORDER BY id ASC LIMIT ? OFFSET ?", (user["id"], limit, offset))
         rows = [dict(r) for r in cursor.fetchall()]
         return rows
     finally:
@@ -1884,6 +2272,7 @@ def delete_customer(customer_id: int, user: dict = Depends(get_authenticated_use
 
 @app.post("/api/customers/{customer_id}/churn")
 def predict_customer_churn_by_id(customer_id: int, user: dict = Depends(get_authenticated_user)):
+    churn_limiter.check_and_record(user["id"])
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM customers WHERE id = ? AND user_id = ?", (customer_id, user["id"]))
@@ -1995,36 +2384,40 @@ def predict_customer_churn_by_id(customer_id: int, user: dict = Depends(get_auth
 # Standalone ML Churn Endpoint
 @app.post("/api/predict/churn")
 def predict_churn(request: ChurnRequest, user: dict = Depends(get_authenticated_user)):
-    model = churn_bundle["model"]
-    features = churn_bundle["features"]
-    input_data = pd.DataFrame(
-        [[
-            request.total_orders,
-            request.total_spend,
-            request.days_since_last_purchase,
-            request.support_tickets,
-            request.complaints,
-            request.average_order_value
-        ]],
-        columns=features
-    )
-    probability = round(float(model.predict_proba(input_data)[0][1]) * 100, 2)
+    churn_limiter.check_and_record(user["id"])
+    with ConcurrencyGuard(resource_type="ml_churn", user_id=user["id"], op_name="churn prediction") as guard:
+        def _calc():
+            model = churn_bundle["model"]
+            features = churn_bundle["features"]
+            input_data = pd.DataFrame(
+                [[
+                    request.total_orders,
+                    request.total_spend,
+                    request.days_since_last_purchase,
+                    request.support_tickets,
+                    request.complaints,
+                    request.average_order_value
+                ]],
+                columns=features
+            )
+            probability = round(float(model.predict_proba(input_data)[0][1]) * 100, 2)
 
-    if probability >= 75:
-        risk = "HIGH"
-        recommendation = "Contact the customer immediately and offer a personalized retention campaign."
-    elif probability >= 45:
-        risk = "MEDIUM"
-        recommendation = "Monitor the customer and run a personalized engagement campaign."
-    else:
-        risk = "LOW"
-        recommendation = "Customer appears stable. Continue normal engagement."
+            if probability >= 75:
+                risk = "HIGH"
+                recommendation = "Contact the customer immediately and offer a personalized retention campaign."
+            elif probability >= 45:
+                risk = "MEDIUM"
+                recommendation = "Monitor the customer and run a personalized engagement campaign."
+            else:
+                risk = "LOW"
+                recommendation = "Customer appears stable. Continue normal engagement."
 
-    return {
-        "churn_probability": probability,
-        "risk": risk,
-        "recommendation": recommendation
-    }
+            return {
+                "churn_probability": probability,
+                "risk": risk,
+                "recommendation": recommendation
+            }
+        return run_with_execution_timeout(_calc, timeout_seconds=30.0, op_name="churn prediction", guard=guard)
 
 
 # ============================================================
@@ -2032,11 +2425,15 @@ def predict_churn(request: ChurnRequest, user: dict = Depends(get_authenticated_
 # ============================================================
 
 @app.get("/api/employees")
-def get_employees(user: dict = Depends(get_authenticated_user)):
+def get_employees(
+    limit: int = Query(default=100, ge=1, le=500, description="Maximum number of employee records to return"),
+    offset: int = Query(default=0, ge=0, description="Offset for pagination"),
+    user: dict = Depends(get_authenticated_user)
+):
     conn = get_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT * FROM employees WHERE user_id = ? ORDER BY id ASC", (user["id"],))
+        cursor.execute("SELECT * FROM employees WHERE user_id = ? ORDER BY id ASC LIMIT ? OFFSET ?", (user["id"], limit, offset))
         rows = [dict(r) for r in cursor.fetchall()]
         return rows
     finally:
@@ -2133,11 +2530,15 @@ def delete_employee(emp_id: int, user: dict = Depends(get_authenticated_user)):
 # ============================================================
 
 @app.get("/api/inventory")
-def get_inventory(user: dict = Depends(get_authenticated_user)):
+def get_inventory(
+    limit: int = Query(default=100, ge=1, le=500, description="Maximum number of products to return"),
+    offset: int = Query(default=0, ge=0, description="Offset for pagination"),
+    user: dict = Depends(get_authenticated_user)
+):
     conn = get_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT * FROM products WHERE user_id = ? ORDER BY id ASC", (user["id"],))
+        cursor.execute("SELECT * FROM products WHERE user_id = ? ORDER BY id ASC LIMIT ? OFFSET ?", (user["id"], limit, offset))
         rows = [dict(r) for r in cursor.fetchall()]
         return rows
     finally:
@@ -2282,6 +2683,7 @@ def restock_product(product_id: int, quantity: int = Query(default=50, ge=1), us
 
 @app.post("/api/inventory/{product_id}/forecast")
 def forecast_product_demand_by_id(product_id: int, user: dict = Depends(get_authenticated_user)):
+    inventory_limiter.check_and_record(user["id"])
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM products WHERE id = ? AND user_id = ?", (product_id, user["id"]))
@@ -2357,39 +2759,43 @@ def forecast_product_demand_by_id(product_id: int, user: dict = Depends(get_auth
 # Standalone ML Inventory Demand Prediction
 @app.post("/api/predict/inventory")
 def predict_inventory(request: InventoryRequest, user: dict = Depends(get_authenticated_user)):
-    model = inventory_bundle["model"]
-    features = inventory_bundle["features"]
-    input_data = pd.DataFrame(
-        [[
-            request.avg_daily_demand,
-            request.trend,
-            request.promotion_factor
-        ]],
-        columns=features
-    )
-    predicted_30_days = max(0, float(model.predict(input_data)[0]))
-    predicted_7_days = round((predicted_30_days / 30) * 7, 2)
+    inventory_limiter.check_and_record(user["id"])
+    with ConcurrencyGuard(resource_type="ml_inv", user_id=user["id"], op_name="inventory forecasting") as guard:
+        def _calc():
+            model = inventory_bundle["model"]
+            features = inventory_bundle["features"]
+            input_data = pd.DataFrame(
+                [[
+                    request.avg_daily_demand,
+                    request.trend,
+                    request.promotion_factor
+                ]],
+                columns=features
+            )
+            predicted_30_days = max(0, float(model.predict(input_data)[0]))
+            predicted_7_days = round((predicted_30_days / 30) * 7, 2)
 
-    if request.current_stock < predicted_7_days:
-        risk = "HIGH"
-        reorder_quantity = max(0, round(predicted_7_days * 1.2 - request.current_stock))
-        recommendation = "Stock is likely to be insufficient. Reorder immediately."
-    elif request.current_stock <= request.reorder_level:
-        risk = "MEDIUM"
-        reorder_quantity = max(0, round(predicted_7_days * 0.5))
-        recommendation = "Inventory may become low. Consider reordering."
-    else:
-        risk = "LOW"
-        reorder_quantity = 0
-        recommendation = "Current inventory appears sufficient."
+            if request.current_stock < predicted_7_days:
+                risk = "HIGH"
+                reorder_quantity = max(0, round(predicted_7_days * 1.2 - request.current_stock))
+                recommendation = "Stock is likely to be insufficient. Reorder immediately."
+            elif request.current_stock <= request.reorder_level:
+                risk = "MEDIUM"
+                reorder_quantity = max(0, round(predicted_7_days * 0.5))
+                recommendation = "Inventory may become low. Consider reordering."
+            else:
+                risk = "LOW"
+                reorder_quantity = 0
+                recommendation = "Current inventory appears sufficient."
 
-    return {
-        "predicted_demand_7_days": predicted_7_days,
-        "predicted_demand_30_days": round(predicted_30_days, 2),
-        "stockout_risk": risk,
-        "recommended_reorder": reorder_quantity,
-        "recommendation": recommendation
-    }
+            return {
+                "predicted_demand_7_days": predicted_7_days,
+                "predicted_demand_30_days": round(predicted_30_days, 2),
+                "stockout_risk": risk,
+                "recommended_reorder": reorder_quantity,
+                "recommendation": recommendation
+            }
+        return run_with_execution_timeout(_calc, timeout_seconds=30.0, op_name="inventory forecasting", guard=guard)
 
 
 # ============================================================
@@ -2397,10 +2803,14 @@ def predict_inventory(request: InventoryRequest, user: dict = Depends(get_authen
 # ============================================================
 
 @app.get("/api/invoices")
-def get_invoices(user: dict = Depends(get_authenticated_user)):
+def get_invoices(
+    limit: int = Query(default=100, ge=1, le=500, description="Maximum number of invoices to return"),
+    offset: int = Query(default=0, ge=0, description="Offset for pagination"),
+    user: dict = Depends(get_authenticated_user)
+):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM invoices WHERE user_id = ? ORDER BY issued DESC, id DESC", (user["id"],))
+    cursor.execute("SELECT * FROM invoices WHERE user_id = ? ORDER BY issued DESC, id DESC LIMIT ? OFFSET ?", (user["id"], limit, offset))
     rows = [dict(r) for r in cursor.fetchall()]
 
     for row in rows:
@@ -2556,44 +2966,57 @@ def generate_invoice_pdf_bytes(inv: dict, line_items: list, customer: dict = Non
 
 @app.get("/api/invoices/{invoice_id}/pdf")
 def get_invoice_pdf(invoice_id: str, user: dict = Depends(get_authenticated_user)):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM invoices WHERE id = ? AND user_id = ?", (invoice_id, user["id"]))
-    row = cursor.fetchone()
-    if not row:
+    pdf_limiter.check_and_record(user["id"])
+    with ConcurrencyGuard(resource_type="pdf_gen", user_id=user["id"], op_name="PDF generation") as guard:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM invoices WHERE id = ? AND user_id = ?", (invoice_id, user["id"]))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Invoice not found or access denied")
+
+        inv_data = dict(row)
+        cursor.execute("SELECT * FROM invoice_items WHERE invoice_id = ? AND user_id = ?", (invoice_id, user["id"]))
+        line_items = [dict(it) for it in cursor.fetchall()]
+
+        cursor.execute("SELECT * FROM customers WHERE name = ? AND user_id = ?", (inv_data.get("client"), user["id"]))
+        cust_row = cursor.fetchone()
+        customer = dict(cust_row) if cust_row else None
         conn.close()
-        raise HTTPException(status_code=404, detail="Invoice not found or access denied")
 
-    inv_data = dict(row)
-    cursor.execute("SELECT * FROM invoice_items WHERE invoice_id = ? AND user_id = ?", (invoice_id, user["id"]))
-    line_items = [dict(it) for it in cursor.fetchall()]
+        def _render_pdf():
+            return generate_invoice_pdf_bytes(inv_data, line_items, customer)
 
-    cursor.execute("SELECT * FROM customers WHERE name = ? AND user_id = ?", (inv_data.get("client"), user["id"]))
-    cust_row = cursor.fetchone()
-    customer = dict(cust_row) if cust_row else None
-    conn.close()
+        try:
+            pdf_bytes = run_with_execution_timeout(_render_pdf, timeout_seconds=15.0, op_name="PDF generation", guard=guard)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("PDF generation failed for invoice %s: %s", invoice_id, e, exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to generate invoice PDF document.")
 
-    try:
-        pdf_bytes = generate_invoice_pdf_bytes(inv_data, line_items, customer)
-    except Exception as e:
-        logger.error("PDF generation failed for invoice %s: %s", invoice_id, e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to generate invoice PDF document.")
+        clean_id = re.sub(r'[^a-zA-Z0-9_\-]', '_', invoice_id)
+        filename = f"Invoice_{clean_id}.pdf"
 
-    clean_id = re.sub(r'[^a-zA-Z0-9_\-]', '_', invoice_id)
-    filename = f"Invoice_{clean_id}.pdf"
-
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Content-Type": "application/pdf"
-        }
-    )
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Type": "application/pdf"
+            }
+        )
 
 
 @app.get("/api/search")
-def global_search(q: str = Query(default="", min_length=0), user: dict = Depends(get_authenticated_user)):
+def global_search(
+    q: str = Query(default="", min_length=0, max_length=100, description="Search keyword up to 100 characters"),
+    user: dict = Depends(get_authenticated_user)
+):
+    if len(q) > 100:
+        raise HTTPException(status_code=422, detail="Search query must not exceed 100 characters.")
+    search_limiter.check_and_record(user["id"])
     clean_q = q.strip()
     if not clean_q or len(clean_q) < 1:
         return {"query": "", "total": 0, "results": {"customers": [], "products": [], "invoices": [], "employees": []}}
@@ -2914,7 +3337,11 @@ def delete_invoice(invoice_id: str, user: dict = Depends(get_authenticated_user)
 # ============================================================
 
 @app.get("/api/notifications")
-def get_notifications(user: dict = Depends(get_authenticated_user)):
+def get_notifications(
+    limit: int = Query(default=50, ge=1, le=500, description="Maximum number of notifications to return"),
+    offset: int = Query(default=0, ge=0, description="Offset for pagination"),
+    user: dict = Depends(get_authenticated_user)
+):
     conn = get_db()
     cursor = conn.cursor()
     try:
@@ -2922,8 +3349,8 @@ def get_notifications(user: dict = Depends(get_authenticated_user)):
         SELECT id, type, title, desc, read, created_at
         FROM notifications
         WHERE user_id = ?
-        ORDER BY id DESC LIMIT 50
-        """, (user["id"],))
+        ORDER BY id DESC LIMIT ? OFFSET ?
+        """, (user["id"], limit, offset))
         rows = []
         for r in cursor.fetchall():
             rd = dict(r)
@@ -3003,6 +3430,7 @@ def clear_all_notifications(user: dict = Depends(get_authenticated_user)):
 
 @app.get("/api/sales/overview")
 def get_sales_overview(user: dict = Depends(get_authenticated_user)):
+    analytics_limiter.check_and_record(user["id"])
     conn = get_db()
     cursor = conn.cursor()
 
@@ -3335,21 +3763,25 @@ def get_sales_forecast(user: dict = Depends(get_authenticated_user)):
 # Standalone ML Sales Forecast API
 @app.post("/api/predict/sales")
 def predict_sales(request: SalesRequest, user: dict = Depends(get_authenticated_user)):
-    model = sales_bundle["model"]
-    features = sales_bundle["features"]
-    input_data = pd.DataFrame(
-        [[
-            request.month_index,
-            request.orders,
-            request.marketing_spend
-        ]],
-        columns=features
-    )
-    prediction = float(model.predict(input_data)[0])
-    return {
-        "predicted_revenue": round(prediction, 2),
-        "currency": "INR"
-    }
+    sales_limiter.check_and_record(user["id"])
+    with ConcurrencyGuard(resource_type="ml_sales", user_id=user["id"], op_name="sales prediction") as guard:
+        def _calc():
+            model = sales_bundle["model"]
+            features = sales_bundle["features"]
+            input_data = pd.DataFrame(
+                [[
+                    request.month_index,
+                    request.orders,
+                    request.marketing_spend
+                ]],
+                columns=features
+            )
+            prediction = float(model.predict(input_data)[0])
+            return {
+                "predicted_revenue": round(prediction, 2),
+                "currency": "INR"
+            }
+        return run_with_execution_timeout(_calc, timeout_seconds=30.0, op_name="sales prediction", guard=guard)
 
 
 # Standalone ML Models Evaluation Metrics Endpoint
@@ -3644,7 +4076,9 @@ def compute_business_health(user_id: int, conn=None):
 
 @app.get("/api/business-health")
 def get_business_health(user: dict = Depends(get_authenticated_user)):
-    return compute_business_health(user["id"])
+    health_limiter.check_and_record(user["id"])
+    with ConcurrencyGuard(resource_type="biz_health", user_id=user["id"], op_name="business health calculation"):
+        return compute_business_health(user["id"])
 
 
 @app.get("/api/dashboard/stats")
@@ -3830,162 +4264,189 @@ def get_dashboard_activity(user: dict = Depends(get_authenticated_user)):
 
 @app.post("/api/copilot/chat")
 def copilot_chat(req: CopilotChatRequest, user: dict = Depends(get_authenticated_user)):
-    query = req.message.lower().strip()
-    conn = get_db()
-    cursor = conn.cursor()
+    if not req.message or not req.message.strip():
+        raise HTTPException(status_code=422, detail="Message cannot be empty.")
+    if len(req.message) > 2000:
+        raise HTTPException(status_code=422, detail="Message exceeds maximum allowed length of 2000 characters.")
+    copilot_limiter.check_and_record(user["id"])
+    with ConcurrencyGuard(resource_type="ai_copilot", user_id=user["id"], op_name="AI Copilot chat"):
+        query = req.message.lower().strip()
+        conn = get_db()
+        cursor = conn.cursor()
 
-    if any(w in query for w in ["revenue", "sales", "today", "income", "money"]):
-        cursor.execute("SELECT COALESCE(SUM(amount_num), 0) FROM invoices WHERE user_id = ? AND status = 'Paid'", (user["id"],))
-        paid_rev = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM invoices WHERE user_id = ?", (user["id"],))
-        total_inv = cursor.fetchone()[0]
+        if any(w in query for w in ["revenue", "sales", "today", "income", "money"]):
+            cursor.execute("SELECT COALESCE(SUM(amount_num), 0) FROM invoices WHERE user_id = ? AND status = 'Paid'", (user["id"],))
+            paid_rev = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM invoices WHERE user_id = ?", (user["id"],))
+            total_inv = cursor.fetchone()[0]
 
-        if total_inv == 0:
-            response_text = (
-                f"You do not have any invoices recorded in your workspace yet.\n\n"
-                f"To start tracking revenue, navigate to **Invoices** and click **New Invoice**."
-            )
-            chart = False
-        else:
-            response_text = (
-                f"Here is your revenue summary from your live database:\n\n"
-                f"- **Total Collected Revenue:** ₹{paid_rev:,.0f}\n"
-                f"- **Total Invoices Issued:** {total_inv}\n\n"
-                f"You can view detailed monthly breakdowns and seasonal projections on the **Sales Analytics** page."
-            )
-            chart = True
-
-    elif any(w in query for w in ["churn", "at risk", "retention", "customer"]):
-        cursor.execute("SELECT name, company, churn, ltv FROM customers WHERE user_id = ? AND churn >= 40 ORDER BY churn DESC", (user["id"],))
-        risky = cursor.fetchall()
-        if not risky:
-            cursor.execute("SELECT COUNT(*) FROM customers WHERE user_id = ?", (user["id"],))
-            total_cust = cursor.fetchone()[0]
-            if total_cust == 0:
-                response_text = "You currently have 0 customers registered. Add customers from the **Customers** page to track churn."
+            if total_inv == 0:
+                response_text = (
+                    f"You do not have any invoices recorded in your workspace yet.\n\n"
+                    f"To start tracking revenue, navigate to **Invoices** and click **New Invoice**."
+                )
+                chart = False
             else:
-                response_text = "Great news! None of your customers show high churn risk (>40%) right now."
-        else:
-            list_str = "\n".join([f"- **{r['name']}** ({r['company']}): **{r['churn']}% churn risk**" for r in risky])
-            response_text = (
-                f"The AI Churn Prediction model identified the following accounts requiring attention:\n\n"
-                f"{list_str}\n\n"
-                f"**Recommendation:** Schedule a proactive satisfaction check-in and consider extending a contract incentive."
-            )
-        chart = False
+                response_text = (
+                    f"Here is your revenue summary from your live database:\n\n"
+                    f"- **Total Collected Revenue:** ₹{paid_rev:,.0f}\n"
+                    f"- **Total Invoices Issued:** {total_inv}\n\n"
+                    f"You can view detailed monthly breakdowns and seasonal projections on the **Sales Analytics** page."
+                )
+                chart = True
 
-    elif any(w in query for w in ["inventory", "stock", "reorder", "product"]):
-        cursor.execute("SELECT name, stock, reorder, status FROM products WHERE user_id = ? AND status IN ('Critical', 'Low Stock', 'Out of Stock')", (user["id"],))
-        low_items = cursor.fetchall()
-        if not low_items:
+        elif any(w in query for w in ["churn", "at risk", "retention", "customer"]):
+            cursor.execute("SELECT name, company, churn, ltv FROM customers WHERE user_id = ? AND churn >= 40 ORDER BY churn DESC", (user["id"],))
+            risky = cursor.fetchall()
+            if not risky:
+                cursor.execute("SELECT COUNT(*) FROM customers WHERE user_id = ?", (user["id"],))
+                total_cust = cursor.fetchone()[0]
+                if total_cust == 0:
+                    response_text = "You currently have 0 customers registered. Add customers from the **Customers** page to track churn."
+                else:
+                    response_text = "Great news! None of your customers show high churn risk (>40%) right now."
+            else:
+                list_str = "\n".join([f"- **{r['name']}** ({r['company']}): **{r['churn']}% churn risk**" for r in risky])
+                response_text = (
+                    f"The AI Churn Prediction model identified the following accounts requiring attention:\n\n"
+                    f"{list_str}\n\n"
+                    f"**Recommendation:** Schedule a proactive satisfaction check-in and consider extending a contract incentive."
+                )
+            chart = False
+
+        elif any(w in query for w in ["inventory", "stock", "reorder", "product"]):
+            cursor.execute("SELECT name, stock, reorder, status FROM products WHERE user_id = ? AND status IN ('Critical', 'Low Stock', 'Out of Stock')", (user["id"],))
+            low_items = cursor.fetchall()
+            if not low_items:
+                cursor.execute("SELECT COUNT(*) FROM products WHERE user_id = ?", (user["id"],))
+                p_cnt = cursor.fetchone()[0]
+                if p_cnt == 0:
+                    response_text = "Your inventory catalog is currently empty. Add products from the **Inventory** page."
+                else:
+                    response_text = "All catalog products currently maintain healthy inventory levels above their reorder points."
+            else:
+                items_str = "\n".join([f"- **{r['name']}**: {r['stock']} units left (Reorder: {r['reorder']}) — *{r['status']}*" for r in low_items])
+                response_text = (
+                    f"Here is your current restock priority based on inventory demand analysis:\n\n"
+                    f"{items_str}\n\n"
+                    f"**Recommended Action:** Create restock orders for items near or below their threshold."
+                )
+            chart = False
+
+        elif any(w in query for w in ["employee", "staff", "team"]):
+            cursor.execute("SELECT name, role, dept, performance FROM employees WHERE user_id = ? ORDER BY performance DESC LIMIT 5", (user["id"],))
+            top_emps = cursor.fetchall()
+            if not top_emps:
+                response_text = "You do not have any employees listed in your team directory yet. Add them from the **Employees** page."
+            else:
+                emp_str = "\n".join([f"- **{r['name']}** ({r['role']}, {r['dept']}): **{r['performance']}%** performance" for r in top_emps])
+                response_text = f"Here is the top performing personnel in your team:\n\n{emp_str}"
+            chart = False
+
+        else:
+            cursor.execute("SELECT COUNT(*) FROM customers WHERE user_id = ?", (user["id"],))
+            c_cnt = cursor.fetchone()[0]
             cursor.execute("SELECT COUNT(*) FROM products WHERE user_id = ?", (user["id"],))
             p_cnt = cursor.fetchone()[0]
-            if p_cnt == 0:
-                response_text = "Your inventory catalog is currently empty. Add products from the **Inventory** page."
-            else:
-                response_text = "All catalog products currently maintain healthy inventory levels above their reorder points."
-        else:
-            items_str = "\n".join([f"- **{r['name']}**: {r['stock']} units left (Reorder: {r['reorder']}) — *{r['status']}*" for r in low_items])
+            cursor.execute("SELECT COUNT(*) FROM invoices WHERE user_id = ?", (user["id"],))
+            i_cnt = cursor.fetchone()[0]
+
             response_text = (
-                f"Here is your current restock priority based on inventory demand analysis:\n\n"
-                f"{items_str}\n\n"
-                f"**Recommended Action:** Create restock orders for items near or below their threshold."
+                f"I checked your live business workspace:\n\n"
+                f"- **Active Customers:** {c_cnt}\n"
+                f"- **Catalog Products:** {p_cnt}\n"
+                f"- **Invoices Tracked:** {i_cnt}\n\n"
+                f"You can ask me questions about your revenue, inventory restocking, churn analysis, or business health."
             )
-        chart = False
+            chart = False
 
-    elif any(w in query for w in ["employee", "staff", "team"]):
-        cursor.execute("SELECT name, role, dept, performance FROM employees WHERE user_id = ? ORDER BY performance DESC LIMIT 5", (user["id"],))
-        top_emps = cursor.fetchall()
-        if not top_emps:
-            response_text = "You do not have any employees listed in your team directory yet. Add them from the **Employees** page."
-        else:
-            emp_str = "\n".join([f"- **{r['name']}** ({r['role']}, {r['dept']}): **{r['performance']}%** performance" for r in top_emps])
-            response_text = f"Here is the top performing personnel in your team:\n\n{emp_str}"
-        chart = False
-
-    else:
-        cursor.execute("SELECT COUNT(*) FROM customers WHERE user_id = ?", (user["id"],))
-        c_cnt = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM products WHERE user_id = ?", (user["id"],))
-        p_cnt = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM invoices WHERE user_id = ?", (user["id"],))
-        i_cnt = cursor.fetchone()[0]
-
-        response_text = (
-            f"I checked your live business workspace:\n\n"
-            f"- **Active Customers:** {c_cnt}\n"
-            f"- **Catalog Products:** {p_cnt}\n"
-            f"- **Invoices Tracked:** {i_cnt}\n\n"
-            f"You can ask me questions about your revenue, inventory restocking, churn analysis, or business health."
-        )
-        chart = False
-
-    conn.close()
-    return {
-        "role": "ai",
-        "content": response_text,
-        "chart": chart
-    }
+        conn.close()
+        return {
+            "role": "ai",
+            "content": response_text,
+            "chart": chart
+        }
 
 
 # ============================================================
 # 10. REPORTS & PROFIT ANALYZER APIS (MULTI-TENANT)
 # ============================================================
 
+ALLOWED_REPORT_TYPES = {
+    "customer", "customers", "inventory", "employee", "employees",
+    "financial", "invoices", "sales", "profit"
+}
+
 @app.get("/api/reports/{report_type}")
 def get_report_data(report_type: str, user: dict = Depends(get_authenticated_user)):
-    conn = get_db()
-    cursor = conn.cursor()
+    clean_type = (report_type or "").lower().strip()
+    if clean_type not in ALLOWED_REPORT_TYPES or len(clean_type) > 50:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid report type '{report_type}'. Allowed types: {', '.join(sorted(ALLOWED_REPORT_TYPES))}"
+        )
+    report_limiter.check_and_record(user["id"])
+    with ConcurrencyGuard(resource_type="report_gen", user_id=user["id"], op_name="report generation"):
+        conn = get_db()
+        cursor = conn.cursor()
 
-    if "customer" in report_type.lower():
-        cursor.execute("SELECT name, company, ltv, orders, status FROM customers WHERE user_id = ?", (user["id"],))
-        cust_rows = [[r[0], r[1], r[2], str(r[3]), r[4]] for r in cursor.fetchall()]
-        data = {
-            "headers": ["Customer", "Company / Segment", "LTV", "Orders", "Status"],
-            "rows": cust_rows,
-            "summary": [
-                {"label": "Total Customers", "value": str(len(cust_rows))},
-                {"label": "Active Customers", "value": str(sum(1 for r in cust_rows if r[4] == "Active"))},
-                {"label": "At Risk", "value": str(sum(1 for r in cust_rows if r[4] == "At Risk"))}
-            ]
-        }
-    elif "inventory" in report_type.lower():
-        cursor.execute("SELECT name, sku, stock, reorder, status FROM products WHERE user_id = ?", (user["id"],))
-        prod_rows = [[r[0], r[1], str(r[2]), str(r[3]), r[4]] for r in cursor.fetchall()]
-        data = {
-            "headers": ["Product", "SKU", "Stock", "Reorder Level", "Status"],
-            "rows": prod_rows,
-            "summary": [
-                {"label": "Total SKUs", "value": str(len(prod_rows))},
-                {"label": "Low Stock / Critical", "value": str(sum(1 for r in prod_rows if r[4] in ["Low Stock", "Critical", "Out of Stock"]))}
-            ]
-        }
-    elif "employee" in report_type.lower():
-        cursor.execute("SELECT name, dept, salary, attendance, performance FROM employees WHERE user_id = ?", (user["id"],))
-        emp_rows = [[r[0], r[1], r[2], f"{r[3]}%", f"{r[4]}%"] for r in cursor.fetchall()]
-        data = {
-            "headers": ["Name", "Department", "Salary", "Attendance", "Performance"],
-            "rows": emp_rows,
-            "summary": [
-                {"label": "Total Employees", "value": str(len(emp_rows))}
-            ]
-        }
-    else:
-        cursor.execute("SELECT id, client, amount, status, issued FROM invoices WHERE user_id = ?", (user["id"],))
-        inv_rows = [[r[0], r[1], r[2], r[3], r[4]] for r in cursor.fetchall()]
-        cursor.execute("SELECT COALESCE(SUM(amount_num), 0) FROM invoices WHERE user_id = ? AND status = 'Paid'", (user["id"],))
-        paid_sum = cursor.fetchone()[0]
-        data = {
-            "headers": ["Invoice ID", "Client", "Amount", "Status", "Issued Date"],
-            "rows": inv_rows,
-            "summary": [
-                {"label": "Total Invoices", "value": str(len(inv_rows))},
-                {"label": "Collected Revenue", "value": f"₹{paid_sum:,.0f}"}
-            ]
-        }
+        if "customer" in clean_type:
+            cursor.execute("SELECT name, company, ltv, orders, status FROM customers WHERE user_id = ? ORDER BY id ASC LIMIT 1000", (user["id"],))
+            cust_rows = [[r[0], r[1], r[2], str(r[3]), r[4]] for r in cursor.fetchall()]
+            cursor.execute("SELECT COUNT(*), COALESCE(SUM(CASE WHEN status = 'Active' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN status = 'At Risk' THEN 1 ELSE 0 END), 0) FROM customers WHERE user_id = ?", (user["id"],))
+            total_cust, active_cust, at_risk_cust = cursor.fetchone()
+            data = {
+                "headers": ["Customer", "Company / Segment", "LTV", "Orders", "Status"],
+                "rows": cust_rows,
+                "summary": [
+                    {"label": "Total Customers", "value": str(total_cust)},
+                    {"label": "Active Customers", "value": str(active_cust)},
+                    {"label": "At Risk", "value": str(at_risk_cust)}
+                ]
+            }
+        elif "inventory" in clean_type:
+            cursor.execute("SELECT name, sku, stock, reorder, status FROM products WHERE user_id = ? ORDER BY id ASC LIMIT 1000", (user["id"],))
+            prod_rows = [[r[0], r[1], str(r[2]), str(r[3]), r[4]] for r in cursor.fetchall()]
+            cursor.execute("SELECT COUNT(*), COALESCE(SUM(CASE WHEN status IN ('Low Stock', 'Critical', 'Out of Stock') THEN 1 ELSE 0 END), 0) FROM products WHERE user_id = ?", (user["id"],))
+            total_skus, low_stock = cursor.fetchone()
+            data = {
+                "headers": ["Product", "SKU", "Stock", "Reorder Level", "Status"],
+                "rows": prod_rows,
+                "summary": [
+                    {"label": "Total SKUs", "value": str(total_skus)},
+                    {"label": "Low Stock / Critical", "value": str(low_stock)}
+                ]
+            }
+        elif "employee" in clean_type:
+            cursor.execute("SELECT name, dept, salary, attendance, performance FROM employees WHERE user_id = ? ORDER BY id ASC LIMIT 1000", (user["id"],))
+            emp_rows = [[r[0], r[1], r[2], f"{r[3]}%", f"{r[4]}%"] for r in cursor.fetchall()]
+            cursor.execute("SELECT COUNT(*) FROM employees WHERE user_id = ?", (user["id"],))
+            total_emps = cursor.fetchone()[0]
+            data = {
+                "headers": ["Name", "Department", "Salary", "Attendance", "Performance"],
+                "rows": emp_rows,
+                "summary": [
+                    {"label": "Total Employees", "value": str(total_emps)}
+                ]
+            }
+        else:
+            cursor.execute("SELECT id, client, amount, status, issued FROM invoices WHERE user_id = ? ORDER BY issued DESC, id DESC LIMIT 1000", (user["id"],))
+            inv_rows = [[r[0], r[1], r[2], r[3], r[4]] for r in cursor.fetchall()]
+            cursor.execute("SELECT COUNT(*), COALESCE(SUM(amount_num), 0) FROM invoices WHERE user_id = ? AND status = 'Paid'", (user["id"],))
+            paid_count, paid_sum = cursor.fetchone()
+            cursor.execute("SELECT COUNT(*) FROM invoices WHERE user_id = ?", (user["id"],))
+            total_inv = cursor.fetchone()[0]
+            data = {
+                "headers": ["Invoice ID", "Client", "Amount", "Status", "Issued Date"],
+                "rows": inv_rows,
+                "summary": [
+                    {"label": "Total Invoices", "value": str(total_inv)},
+                    {"label": "Collected Revenue", "value": f"₹{paid_sum:,.0f}"}
+                ]
+            }
 
-    conn.close()
-    return data
+        conn.close()
+        return data
 
 
 @app.get("/api/profit/products")
@@ -4155,7 +4616,9 @@ def generate_action_center_items(user_id: int, conn=None):
 
 @app.get("/api/action-center")
 def get_action_center(user: dict = Depends(get_authenticated_user)):
-    return generate_action_center_items(user["id"])
+    action_center_limiter.check_and_record(user["id"])
+    with ConcurrencyGuard(resource_type="act_center", user_id=user["id"], op_name="action center analysis"):
+        return generate_action_center_items(user["id"])
 
 
 # ============================================================

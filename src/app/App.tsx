@@ -3210,6 +3210,7 @@ function CustomersPage() {
                   <option value={10}>10</option>
                   <option value={25}>25</option>
                   <option value={50}>50</option>
+                  <option value={100}>100</option>
                 </select>
                 <span className="text-slate-400 ml-2">
                   Showing {filteredCustomers.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filteredCustomers.length)} of {filteredCustomers.length}
@@ -3698,11 +3699,17 @@ function InventoryPage() {
     }
   };
 
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
   const filtered = productsList.filter(p =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
     p.sku.toLowerCase().includes(search.toLowerCase()) ||
     p.category.toLowerCase().includes(search.toLowerCase())
   );
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paginated = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <div className="space-y-5">
@@ -3720,7 +3727,7 @@ function InventoryPage() {
         <div className="flex-1 bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
           <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-100">
             <h2 className="text-sm font-semibold text-slate-800 flex-1">Product Inventory ({filtered.length})</h2>
-            <SearchBar value={search} onChange={setSearch} placeholder="Search products..." />
+            <SearchBar value={search} onChange={(val) => { setSearch(val); setCurrentPage(1); }} placeholder="Search products..." />
             <button className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50"><Filter size={13} />Filter</button>
             <GradientButton size="sm" onClick={openAddModal}><Plus size={13} />Add Product</GradientButton>
           </div>
@@ -3740,7 +3747,7 @@ function InventoryPage() {
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {filtered.length > 0 ? (
-                  filtered.map(p => (
+                  paginated.map(p => (
                     <tr
                       key={p.id}
                       onClick={() => handleSelectProduct(p)}
@@ -3788,6 +3795,47 @@ function InventoryPage() {
               )}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {filtered.length > 0 && (
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3.5 border-t border-slate-100 bg-slate-50/50 text-xs text-slate-600">
+            <div className="flex items-center gap-2">
+              <span>Rows per page:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+                className="border border-slate-200 rounded-lg px-2 py-1 bg-white text-xs outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+              >
+                <option value={5}>5</option>
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+              <span className="text-slate-400 ml-2">
+                Showing {filtered.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filtered.length)} of {filtered.length}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage <= 1}
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors"
+              >
+                Previous
+              </button>
+              <span className="px-2 font-medium text-slate-700">
+                Page {currentPage} of {totalPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages}
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors"
+              >
+                Next
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -4350,6 +4398,7 @@ function InvoicesPage() {
                   <option value={10}>10</option>
                   <option value={25}>25</option>
                   <option value={50}>50</option>
+                  <option value={100}>100</option>
                 </select>
                 <span className="text-slate-400 ml-2">
                   Showing {filtered.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filtered.length)} of {filtered.length}
@@ -4806,11 +4855,17 @@ function EmployeesPage() {
     }
   };
 
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
   const filtered = employeesList.filter(e =>
     e.name.toLowerCase().includes(search.toLowerCase()) ||
     e.role.toLowerCase().includes(search.toLowerCase()) ||
     e.dept.toLowerCase().includes(search.toLowerCase())
   );
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paginated = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <div className="space-y-5">
@@ -4827,7 +4882,7 @@ function EmployeesPage() {
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
         <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-100">
           <h2 className="text-sm font-semibold text-slate-800 flex-1">All Employees ({filtered.length})</h2>
-          <SearchBar value={search} onChange={setSearch} placeholder="Search employees..." />
+          <SearchBar value={search} onChange={(val) => { setSearch(val); setCurrentPage(1); }} placeholder="Search employees..." />
           <button className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50"><Filter size={13} />Filter</button>
           <GradientButton size="sm" onClick={openAddModal}><Plus size={13} />Add Employee</GradientButton>
         </div>
@@ -4847,7 +4902,7 @@ function EmployeesPage() {
             </thead>
             <tbody className="divide-y divide-slate-50">
               {filtered.length > 0 ? (
-                filtered.map(e => (
+                paginated.map(e => (
                   <tr key={e.id} onClick={() => setSelected(selected?.id === e.id ? null : e)} className={`hover:bg-slate-50 transition-colors cursor-pointer ${selected?.id === e.id ? "bg-indigo-50/50" : ""}`}>
                   <td className="px-5 py-3.5">
                     <div className="flex items-center gap-3">
@@ -4903,6 +4958,47 @@ function EmployeesPage() {
             )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {filtered.length > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3.5 border-t border-slate-100 bg-slate-50/50 text-xs text-slate-600">
+          <div className="flex items-center gap-2">
+            <span>Rows per page:</span>
+            <select
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+              className="border border-slate-200 rounded-lg px-2 py-1 bg-white text-xs outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+            >
+              <option value={5}>5</option>
+              <option value={10}>10</option>
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+            </select>
+            <span className="text-slate-400 ml-2">
+              Showing {filtered.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filtered.length)} of {filtered.length}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage <= 1}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors"
+            >
+              Previous
+            </button>
+            <span className="px-2 font-medium text-slate-700">
+              Page {currentPage} of {totalPages}
+            </span>
+            <button
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage >= totalPages}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors"
+            >
+              Next
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -5563,6 +5659,8 @@ function NotificationsPage() {
   const [filter, setFilter] = useState("All");
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const loadNotifications = () => {
     setLoading(true);
@@ -5600,13 +5698,15 @@ function NotificationsPage() {
   const typeColor: Record<string, string> = { ai: "bg-indigo-100 text-indigo-600", inventory: "bg-amber-100 text-amber-600", payment: "bg-red-100 text-red-600", customer: "bg-violet-100 text-violet-600", revenue: "bg-emerald-100 text-emerald-600", employee: "bg-blue-100 text-blue-600" };
   const filters = ["All", "AI", "Inventory", "Customer", "Payment", "Revenue", "Employee"];
   const filtered = filter === "All" ? items : items.filter(n => n.type === filter.toLowerCase());
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paginated = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <div className="max-w-3xl space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           {filters.map(f => (
-            <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-colors ${filter === f ? "bg-indigo-500 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>{f}</button>
+            <button key={f} onClick={() => { setFilter(f); setCurrentPage(1); }} className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-colors ${filter === f ? "bg-indigo-500 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>{f}</button>
           ))}
         </div>
         <div className="flex items-center gap-3">
@@ -5638,7 +5738,7 @@ function NotificationsPage() {
             <p className="text-xs text-slate-400 mt-1">You're all caught up with business alerts.</p>
           </div>
         ) : (
-          filtered.map(n => {
+          paginated.map(n => {
             const Icon = typeIcon[n.type] || Bell;
             return (
               <div key={n.id} onClick={async () => {
@@ -5672,6 +5772,46 @@ function NotificationsPage() {
           })
         )}
       </div>
+
+      {filtered.length > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3.5 border border-slate-100 rounded-2xl bg-white shadow-sm text-xs text-slate-600">
+          <div className="flex items-center gap-2">
+            <span>Rows per page:</span>
+            <select
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+              className="border border-slate-200 rounded-lg px-2 py-1 bg-white text-xs outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+            >
+              <option value={5}>5</option>
+              <option value={10}>10</option>
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+            </select>
+            <span className="text-slate-400 ml-2">
+              Showing {filtered.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filtered.length)} of {filtered.length}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage <= 1}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors"
+            >
+              Previous
+            </button>
+            <span className="px-2 font-medium text-slate-700">
+              Page {currentPage} of {totalPages}
+            </span>
+            <button
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage >= totalPages}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
