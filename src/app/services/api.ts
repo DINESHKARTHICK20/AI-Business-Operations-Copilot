@@ -309,6 +309,28 @@ export interface AuthResponse {
   user?: UserSession;
 }
 
+export interface SessionStatusResponse {
+  authenticated: boolean;
+  user_id?: number;
+  idle_timeout_seconds: number;
+  absolute_timeout_seconds: number;
+  warning_seconds: number;
+  idle_remaining_seconds: number;
+  absolute_remaining_seconds: number;
+  remaining_seconds: number;
+  should_warn: boolean;
+}
+
+export interface SessionExtendResponse {
+  status: string;
+  message?: string;
+  idle_timeout_seconds: number;
+  idle_remaining_seconds: number;
+  absolute_remaining_seconds: number;
+  remaining_seconds: number;
+  warning_seconds: number;
+}
+
 // ─── Generic HTTP Request Handler ─────────────────────────────────────────────
 
 // Automatically purge legacy session tokens from browser localStorage on script evaluation
@@ -374,22 +396,26 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   }
 
   if (!res.ok) {
-    if (res.status === 401) {
-      if (typeof localStorage !== "undefined") {
-        localStorage.removeItem("bizops_session_token");
-        localStorage.removeItem("bizops_user");
-      }
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent("bizops_unauthorized"));
-      }
-    }
-
     const errorText = await res.text();
     let errorJson: any = null;
     try {
       errorJson = JSON.parse(errorText);
     } catch {
       errorJson = null;
+    }
+
+    if (res.status === 401) {
+      const reasonDetail = errorJson?.detail || errorText || "Unauthorized - session expired";
+      if (typeof localStorage !== "undefined") {
+        try {
+          localStorage.removeItem("bizops_session_token");
+          localStorage.removeItem("bizops_user");
+          localStorage.setItem("bizops_logout_sync", JSON.stringify({ reason: reasonDetail, time: Date.now() }));
+        } catch {}
+      }
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("bizops_unauthorized", { detail: { reason: reasonDetail } }));
+      }
     }
 
     if (!errorJson && (res.status === 502 || res.status === 503 || res.status === 504)) {
@@ -749,7 +775,9 @@ export const api = {
     if (limit !== undefined) params.append("limit", String(limit));
     if (offset !== undefined) params.append("offset", String(offset));
     const qs = params.toString();
-    return request<NotificationItem[]>(`/api/notifications${qs ? `?${qs}` : ""}`);
+    return request<NotificationItem[]>(`/api/notifications${qs ? `?${qs}` : ""}`, {
+      headers: { "X-Passive-Polling": "true" }
+    });
   },
 
   async markAllNotificationsRead(): Promise<{ status: string }> {
@@ -820,6 +848,18 @@ export const api = {
 
   async getCsrfToken(): Promise<{ csrf_token: string }> {
     return request<{ csrf_token: string }>("/api/auth/csrf");
+  },
+
+  async getSessionStatus(): Promise<SessionStatusResponse> {
+    return request<SessionStatusResponse>("/api/auth/session-status", {
+      headers: { "X-Passive-Polling": "true" }
+    });
+  },
+
+  async extendSession(): Promise<SessionExtendResponse> {
+    return request<SessionExtendResponse>("/api/auth/session-extend", {
+      method: "POST"
+    });
   },
 
   async logoutUser(): Promise<{ status: string; message?: string }> {

@@ -6183,6 +6183,73 @@ function DesignSystemPage() {
   );
 }
 
+// ─── Inactivity Warning Modal (SEC-11) ───────────────────────────────────────
+
+function InactivityWarningModal({
+  remainingSeconds,
+  onExtend,
+  onLogout,
+  isExtending,
+}: {
+  remainingSeconds: number;
+  onExtend: () => void;
+  onLogout: () => void;
+  isExtending: boolean;
+}) {
+  const mins = Math.floor(remainingSeconds / 60);
+  const secs = remainingSeconds % 60;
+  const timeFormatted = `${mins}:${secs < 10 ? "0" : ""}${secs}`;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="inactivity-warning-title"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fadeIn"
+    >
+      <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-6 max-w-md w-full shadow-2xl text-white">
+        <div className="flex items-center gap-3 text-amber-400 mb-4">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center shrink-0">
+            <Clock size={22} className="animate-pulse text-amber-400" />
+          </div>
+          <div>
+            <h3 id="inactivity-warning-title" className="font-semibold text-base text-white">
+              Session Inactivity Warning
+            </h3>
+            <p className="text-xs text-amber-400/80">Automatic logout pending</p>
+          </div>
+        </div>
+        <p className="text-sm text-slate-300 mb-4 leading-relaxed">
+          You have been inactive. For security and compliance, your business session will automatically expire in:
+        </p>
+        <div className="text-center py-3 bg-slate-800/80 rounded-xl border border-white/5 mb-6">
+          <span className="text-3xl font-mono font-bold text-amber-400 tracking-wider">
+            {timeFormatted}
+          </span>
+        </div>
+        <div className="flex gap-3">
+          <button
+            type="button"
+            onClick={onLogout}
+            className="flex-1 px-4 py-2.5 rounded-xl border border-white/10 text-sm font-medium text-slate-300 hover:bg-white/5 transition-colors"
+          >
+            Sign Out Now
+          </button>
+          <button
+            type="button"
+            onClick={onExtend}
+            disabled={isExtending}
+            className="flex-1 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-sm font-medium text-white shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2"
+          >
+            {isExtending ? <RefreshCw size={16} className="animate-spin" /> : null}
+            Stay Signed In
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Root App Component ───────────────────────────────────────────────────────
 
 export default function App() {
@@ -6200,6 +6267,41 @@ export default function App() {
     return "landing";
   });
 
+  // Session inactivity and warning state (SEC-11)
+  const [showInactivityWarning, setShowInactivityWarning] = useState(false);
+  const [inactivityCountdown, setInactivityCountdown] = useState(120);
+  const [isExtendingSession, setIsExtendingSession] = useState(false);
+  const lastActivityRef = useRef<number>(Date.now());
+
+  const handleAutoLogout = (reason: string) => {
+    setCurrentUser(null);
+    setLoginNotice(reason);
+    setShowInactivityWarning(false);
+    try {
+      localStorage.removeItem("bizops_active_page");
+      localStorage.removeItem("bizops_user");
+      localStorage.removeItem("bizops_session_token");
+      localStorage.setItem("bizops_logout_sync", JSON.stringify({ reason, time: Date.now() }));
+    } catch { }
+    setPage("login");
+  };
+
+  const handleExtendSession = async () => {
+    setIsExtendingSession(true);
+    try {
+      await api.extendSession();
+      lastActivityRef.current = Date.now();
+      setShowInactivityWarning(false);
+      try {
+        localStorage.setItem("bizops_last_interaction", String(Date.now()));
+      } catch { }
+    } catch {
+      // If extension failed due to expiration, 401 handler triggers logout
+    } finally {
+      setIsExtendingSession(false);
+    }
+  };
+
   // Verify backend session on mount via HttpOnly cookie
   useEffect(() => {
     let isMounted = true;
@@ -6209,6 +6311,7 @@ export default function App() {
         const validUser = res?.user || (res?.email ? { id: res.id, name: res.name, email: res.email, company: res.company, biz_type: res.biz_type } : null);
         if (validUser) {
           setCurrentUser(validUser);
+          lastActivityRef.current = Date.now();
           const savedPage = localStorage.getItem("bizops_active_page") as Page;
           if (savedPage && !["landing", "login", "signup"].includes(savedPage)) {
             setPage(savedPage);
@@ -6230,10 +6333,17 @@ export default function App() {
       });
 
     // Handle expired or revoked sessions immediately across all app views
-    const handleUnauthorized = () => {
-      setCurrentUser(null);
-      setLoginNotice("Your session has expired. Please sign in again.");
-      setPage("login");
+    const handleUnauthorized = (event?: any) => {
+      const reasonDetail = event?.detail?.reason || "Your session has expired. Please sign in again.";
+      let userMsg = "Your session has expired. Please sign in again.";
+      if (reasonDetail.toLowerCase().includes("inactivity")) {
+        userMsg = "Your session has expired due to inactivity. Please sign in again.";
+      } else if (reasonDetail.toLowerCase().includes("lifetime")) {
+        userMsg = "Your session has reached its maximum absolute lifetime (7 days). Please sign in again.";
+      } else if (reasonDetail.toLowerCase().includes("revoked")) {
+        userMsg = "Your session has been revoked. Please sign in again.";
+      }
+      handleAutoLogout(userMsg);
     };
     window.addEventListener("bizops_unauthorized", handleUnauthorized);
 
@@ -6242,6 +6352,99 @@ export default function App() {
       window.removeEventListener("bizops_unauthorized", handleUnauthorized);
     };
   }, []);
+
+  // Multi-tab logout and activity synchronization (SEC-11)
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "bizops_logout_sync" && e.newValue) {
+        try {
+          const data = JSON.parse(e.newValue);
+          let reason = data.reason || "Your session has expired. Please sign in again.";
+          if (reason.toLowerCase().includes("inactivity")) {
+            reason = "Your session has expired due to inactivity. Please sign in again.";
+          }
+          setCurrentUser(null);
+          setLoginNotice(reason);
+          setShowInactivityWarning(false);
+          setPage("login");
+        } catch {
+          setCurrentUser(null);
+          setLoginNotice("Your session has expired. Please sign in again.");
+          setShowInactivityWarning(false);
+          setPage("login");
+        }
+      } else if (e.key === "bizops_last_interaction" && e.newValue) {
+        const otherTabTime = parseInt(e.newValue, 10);
+        if (!isNaN(otherTabTime) && otherTabTime > lastActivityRef.current) {
+          lastActivityRef.current = otherTabTime;
+          setShowInactivityWarning(false);
+        }
+      }
+    };
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, []);
+
+  // Track genuine user interactions (clicks, keys, scrolls) to maintain client-side activity
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const onUserInteraction = () => {
+      const now = Date.now();
+      // If warning modal is open, do not auto-dismiss with passive movement; user must click "Stay Signed In"
+      if (!showInactivityWarning) {
+        if (now - lastActivityRef.current > 5000) {
+          lastActivityRef.current = now;
+          try {
+            localStorage.setItem("bizops_last_interaction", String(now));
+          } catch { }
+        }
+      }
+    };
+
+    window.addEventListener("mousemove", onUserInteraction);
+    window.addEventListener("keydown", onUserInteraction);
+    window.addEventListener("click", onUserInteraction);
+    window.addEventListener("scroll", onUserInteraction);
+    window.addEventListener("touchstart", onUserInteraction);
+
+    return () => {
+      window.removeEventListener("mousemove", onUserInteraction);
+      window.removeEventListener("keydown", onUserInteraction);
+      window.removeEventListener("click", onUserInteraction);
+      window.removeEventListener("scroll", onUserInteraction);
+      window.removeEventListener("touchstart", onUserInteraction);
+    };
+  }, [currentUser, showInactivityWarning]);
+
+  // Session inactivity check interval (runs every second while authenticated)
+  useEffect(() => {
+    if (!currentUser) {
+      setShowInactivityWarning(false);
+      return;
+    }
+
+    lastActivityRef.current = Date.now();
+    const IDLE_TIMEOUT_SEC = 1800; // 30 minutes default
+    const WARNING_SEC = 120;       // 2 minutes warning
+
+    const intervalId = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - lastActivityRef.current) / 1000);
+      const remaining = IDLE_TIMEOUT_SEC - elapsed;
+
+      if (remaining <= 0) {
+        setShowInactivityWarning(false);
+        handleAutoLogout("Your session has expired due to inactivity. Please sign in again.");
+      } else if (remaining <= WARNING_SEC) {
+        setInactivityCountdown(remaining);
+        setShowInactivityWarning(true);
+      } else {
+        setShowInactivityWarning(false);
+      }
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, [currentUser]);
 
   const handlePageChange = (newPage: Page) => {
     setPage(newPage);
@@ -6253,9 +6456,12 @@ export default function App() {
   const handleLoginSuccess = (user: UserSession) => {
     setCurrentUser(user);
     setLoginNotice(null);
+    lastActivityRef.current = Date.now();
+    setShowInactivityWarning(false);
     try {
       localStorage.setItem("bizops_active_page", "dashboard");
       localStorage.setItem("bizops_user", JSON.stringify(user));
+      localStorage.setItem("bizops_last_interaction", String(Date.now()));
     } catch { }
     setPage("dashboard");
   };
@@ -6266,10 +6472,12 @@ export default function App() {
     } catch { }
     setCurrentUser(null);
     setLoginNotice("You have been signed out successfully.");
+    setShowInactivityWarning(false);
     try {
       localStorage.removeItem("bizops_active_page");
       localStorage.removeItem("bizops_user");
       localStorage.removeItem("bizops_session_token");
+      localStorage.setItem("bizops_logout_sync", JSON.stringify({ reason: "Signed out successfully", time: Date.now() }));
     } catch { }
     setPage("login");
   };
@@ -6338,6 +6546,14 @@ export default function App() {
   return (
     <>
       <GradientDefs />
+      {showInactivityWarning && (
+        <InactivityWarningModal
+          remainingSeconds={inactivityCountdown}
+          onExtend={handleExtendSession}
+          onLogout={handleLogout}
+          isExtending={isExtendingSession}
+        />
+      )}
       <AppLayout page={page} setPage={handlePageChange} user={currentUser} onLogout={handleLogout}>
         {page === "dashboard" && <DashboardPage setPage={handlePageChange} user={currentUser} />}
         {page === "business-health" && <BusinessHealthPage setPage={handlePageChange} />}

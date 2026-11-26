@@ -10,7 +10,7 @@ import json
 import hashlib
 import hmac
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 
 import re
@@ -51,6 +51,7 @@ logger = logging.getLogger("bizops.auth")
 # ============================================================
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "bizops_prod_secret_key_change_in_production_2026")
+ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "bizops_prod_admin_secret_key_2026")
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").strip().lower()
 IS_PRODUCTION = ENVIRONMENT == "production"
 
@@ -74,6 +75,14 @@ class _SessionCookieSecureProxy:
         return str(is_session_cookie_secure())
 
 SESSION_COOKIE_SECURE = _SessionCookieSecureProxy()
+
+# ============================================================
+# SESSION TIMEOUT & INACTIVITY POLICIES (SEC-11)
+# ============================================================
+SESSION_IDLE_TIMEOUT_SECONDS = int(os.environ.get("SESSION_IDLE_TIMEOUT_SECONDS", "1800"))       # 30 mins
+SESSION_ABSOLUTE_TIMEOUT_SECONDS = int(os.environ.get("SESSION_ABSOLUTE_TIMEOUT_SECONDS", "604800")) # 7 days
+SESSION_WARNING_SECONDS = int(os.environ.get("SESSION_WARNING_SECONDS", "120"))                 # 2 mins
+SESSION_TOUCH_INTERVAL_SECONDS = int(os.environ.get("SESSION_TOUCH_INTERVAL_SECONDS", "60"))    # Throttle DB writes
 
 DEV_DEFAULT_ORIGINS = [
     "http://localhost:5173",
@@ -402,6 +411,7 @@ def init_db():
         created_at TEXT NOT NULL,
         expires_at TEXT NOT NULL,
         last_activity TEXT NOT NULL DEFAULT '',
+        last_activity_at TEXT NOT NULL DEFAULT '',
         revoked_at TEXT DEFAULT NULL,
         csrf_token TEXT DEFAULT '',
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -411,14 +421,20 @@ def init_db():
     sess_cols = [row[1] for row in cursor.fetchall()]
     if "last_activity" not in sess_cols and len(sess_cols) > 0:
         cursor.execute("ALTER TABLE user_sessions ADD COLUMN last_activity TEXT DEFAULT ''")
+    if "last_activity_at" not in sess_cols and len(sess_cols) > 0:
+        cursor.execute("ALTER TABLE user_sessions ADD COLUMN last_activity_at TEXT DEFAULT ''")
+        cursor.execute("UPDATE user_sessions SET last_activity_at = COALESCE(last_activity, created_at)")
     if "revoked_at" not in sess_cols and len(sess_cols) > 0:
         cursor.execute("ALTER TABLE user_sessions ADD COLUMN revoked_at TEXT DEFAULT NULL")
     if "csrf_token" not in sess_cols and len(sess_cols) > 0:
         cursor.execute("ALTER TABLE user_sessions ADD COLUMN csrf_token TEXT DEFAULT ''")
 
-    # Ensure index on user_sessions expires_at and user_id for fast lookup & pruning
+    # Ensure indexes on user_sessions for fast lookup, expiration checks & pruning
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_last_activity ON user_sessions(last_activity)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_last_activity_at ON user_sessions(last_activity_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_revoked_at ON user_sessions(revoked_at)")
 
     # Prune orphaned legacy sessions
     try:
@@ -594,7 +610,7 @@ app.add_middleware(
     allow_origins=DEV_DEFAULT_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allow_headers=["Content-Type", "X-CSRF-Token", "X-XSRF-Token", "Authorization", "Accept", "X-Requested-With"],
+    allow_headers=["Content-Type", "X-CSRF-Token", "X-XSRF-Token", "Authorization", "Accept", "X-Requested-With", "X-Passive-Polling", "X-Admin-Key"],
     expose_headers=["Retry-After", "Content-Disposition", "X-CSRF-Token"]
 )
 
@@ -1320,6 +1336,8 @@ from backend.rate_limiter import (
     report_limiter,
     search_limiter,
     analytics_limiter,
+    session_extend_limiter,
+    session_cleanup_limiter,
 )
 
 
@@ -1500,25 +1518,129 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
+PASSIVE_POLLING_PATHS = {
+    "/api/notifications",
+    "/api/auth/csrf",
+    "/api/auth/session-status",
+    "/health",
+}
+
+def is_passive_request(request: Request) -> bool:
+    """Determine if a request is passive background polling or status monitoring.
+    Passive requests must NOT extend server-side session inactivity deadlines.
+    """
+    path = request.url.path
+    if path in PASSIVE_POLLING_PATHS:
+        return True
+    if request.headers.get("X-Passive-Polling", "").lower() in ("true", "1", "yes"):
+        return True
+    if request.headers.get("X-Background-Request", "").lower() in ("true", "1", "yes"):
+        return True
+    return False
+
+
+def parse_session_timestamp(raw_val) -> Optional[datetime]:
+    """Parse session timestamp from string or datetime object into UTC datetime."""
+    if not raw_val:
+        return None
+    if isinstance(raw_val, datetime):
+        if raw_val.tzinfo is None:
+            return raw_val.replace(tzinfo=timezone.utc)
+        return raw_val.astimezone(timezone.utc)
+    raw_str = str(raw_val).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+        try:
+            dt = datetime.strptime(raw_str, fmt)
+            return dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def prune_expired_sessions(limit: int = 1000) -> int:
+    """Safe, bounded cleanup of expired and revoked session records from user_sessions.
+    Deletes sessions where:
+    - Absolute expiration has passed: expires_at < NOW(UTC)
+    - Session was created longer ago than absolute lifetime: created_at < (NOW(UTC) - SESSION_ABSOLUTE_TIMEOUT_SECONDS)
+    - Inactivity timeout has passed: COALESCE(last_activity_at, last_activity, created_at) < (NOW(UTC) - SESSION_IDLE_TIMEOUT_SECONDS)
+    - Session was revoked more than 24 hours ago: revoked_at < (NOW(UTC) - 86400s)
+    Preserves all active sessions for all tenants.
+    Uses indexes and bounds deletion with LIMIT to avoid lock contention.
+    """
+    now_utc = datetime.now(timezone.utc)
+    now_str = now_utc.strftime("%Y-%m-%d %H:%M:%S")
+    idle_cutoff = (now_utc - timedelta(seconds=SESSION_IDLE_TIMEOUT_SECONDS)).strftime("%Y-%m-%d %H:%M:%S")
+    abs_cutoff = (now_utc - timedelta(seconds=SESSION_ABSOLUTE_TIMEOUT_SECONDS)).strftime("%Y-%m-%d %H:%M:%S")
+    revoked_cutoff = (now_utc - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    total_deleted = 0
+    try:
+        is_mysql = os.environ.get("USE_MYSQL", "false").lower() in ("true", "1")
+        if is_mysql:
+            cursor.execute("""
+                DELETE FROM user_sessions 
+                WHERE (expires_at < %s)
+                   OR (created_at < %s)
+                   OR (COALESCE(last_activity_at, last_activity, created_at) < %s)
+                   OR (revoked_at IS NOT NULL AND revoked_at < %s)
+                LIMIT %s
+            """, (now_str, abs_cutoff, idle_cutoff, revoked_cutoff, limit))
+        else:
+            cursor.execute("""
+                DELETE FROM user_sessions 
+                WHERE token IN (
+                    SELECT token FROM user_sessions
+                    WHERE (expires_at < ?)
+                       OR (created_at < ?)
+                       OR (COALESCE(last_activity_at, last_activity, created_at) < ?)
+                       OR (revoked_at IS NOT NULL AND revoked_at < ?)
+                    LIMIT ?
+                )
+            """, (now_str, abs_cutoff, idle_cutoff, revoked_cutoff, limit))
+        total_deleted = cursor.rowcount
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.warning("Error pruning expired sessions: %s", e)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return max(0, total_deleted)
+
+
 def create_user_session(cursor, user_id: int) -> str:
-    """Generate a cryptographically secure session token and store in user_sessions (7-day validity)."""
-    now_dt = datetime.now()
-    created_at = now_dt.strftime("%Y-%m-%d %H:%M:%S")
-    expires_at = (now_dt + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-    last_activity = created_at
+    """Generate a cryptographically secure session token and store in user_sessions.
+    Initializes UTC timestamps for created_at, expires_at (absolute timeout: 7 days),
+    last_activity, and last_activity_at (idle timeout baseline: 30 minutes).
+    """
+    now_dt = datetime.now(timezone.utc)
+    now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+    expires_at = (now_dt + timedelta(seconds=SESSION_ABSOLUTE_TIMEOUT_SECONDS)).strftime("%Y-%m-%d %H:%M:%S")
+    last_activity = now_str
+    last_activity_at = now_str
 
     token = secrets.token_urlsafe(32)
     csrf_tok = generate_session_csrf_token(token)
     cursor.execute("""
-    INSERT INTO user_sessions (token, user_id, created_at, expires_at, last_activity, revoked_at, csrf_token)
-    VALUES (?, ?, ?, ?, ?, NULL, ?)
-    """, (token, user_id, created_at, expires_at, last_activity, csrf_tok))
+    INSERT INTO user_sessions (token, user_id, created_at, expires_at, last_activity, last_activity_at, revoked_at, csrf_token)
+    VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
+    """, (token, user_id, now_str, expires_at, last_activity, last_activity_at, csrf_tok))
     return token
 
 
 def get_authenticated_user(request: Request) -> dict:
     """Dependency: Extract session token from cookie (or fallback Bearer header), validate and return user.
+    Enforces strict server-side session inactivity timeout (SESSION_IDLE_TIMEOUT_SECONDS)
+    and absolute session timeout (SESSION_ABSOLUTE_TIMEOUT_SECONDS) stored in MySQL.
     Enforces strict CSRF token validation on all state-changing requests authenticated via cookies.
+    Fails closed (HTTP 503) if database connection is unavailable.
     """
     cookie_token = request.cookies.get("session_token")
     auth_via_cookie = bool(cookie_token)
@@ -1533,11 +1655,21 @@ def get_authenticated_user(request: Request) -> dict:
     if not token:
         raise HTTPException(status_code=401, detail="Unauthorized - authentication required")
 
-    conn = get_db()
+    try:
+        conn = get_db()
+    except Exception as e:
+        logger.critical("Database failure connecting for session authentication: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service is temporarily unavailable due to database maintenance. Please try again shortly.",
+            headers={"Retry-After": "30"}
+        )
+
     cursor = conn.cursor()
     try:
         cursor.execute("""
-        SELECT s.token, s.expires_at, s.revoked_at, s.last_activity, s.csrf_token, u.id, u.name, u.email, u.company, u.biz_type, u.is_active
+        SELECT s.token, s.user_id, s.created_at, s.expires_at, s.last_activity, s.last_activity_at, s.revoked_at, s.csrf_token,
+               u.id, u.name, u.email, u.company, u.biz_type, u.is_active
         FROM user_sessions s
         JOIN users u ON s.user_id = u.id
         WHERE s.token = ?
@@ -1548,24 +1680,59 @@ def get_authenticated_user(request: Request) -> dict:
             raise HTTPException(status_code=401, detail="Unauthorized - invalid session")
 
         row_dict = dict(row)
+
+        # 1. Check revoked status
         if row_dict.get("revoked_at"):
             raise HTTPException(status_code=401, detail="Unauthorized - session has been revoked")
 
+        # 2. Check account active status
         if row_dict.get("is_active") == 0:
             raise HTTPException(status_code=401, detail="Unauthorized - account disabled")
 
-        try:
-            raw_exp = row_dict["expires_at"]
-            if isinstance(raw_exp, datetime):
-                exp = raw_exp
-            else:
-                exp = datetime.strptime(str(raw_exp), "%Y-%m-%d %H:%M:%S")
-            if datetime.now() > exp:
-                raise HTTPException(status_code=401, detail="Unauthorized - session expired")
-        except (ValueError, TypeError):
-            pass
+        # 3. Check absolute session expiration
+        now_utc = datetime.now(timezone.utc)
+        now_str = now_utc.strftime("%Y-%m-%d %H:%M:%S")
+        idle_cutoff_utc = now_utc - timedelta(seconds=SESSION_IDLE_TIMEOUT_SECONDS)
+        idle_cutoff_str = idle_cutoff_utc.strftime("%Y-%m-%d %H:%M:%S")
+        absolute_cutoff_utc = now_utc - timedelta(seconds=SESSION_ABSOLUTE_TIMEOUT_SECONDS)
+        absolute_cutoff_str = absolute_cutoff_utc.strftime("%Y-%m-%d %H:%M:%S")
 
-        # Secure CSRF token bound to this specific session
+        expires_at_dt = parse_session_timestamp(row_dict.get("expires_at"))
+        created_at_dt = parse_session_timestamp(row_dict.get("created_at"))
+
+        if expires_at_dt and now_utc >= expires_at_dt:
+            logger.warning("Session reached absolute expiration date (user_id=%s, expires_at=%s)", row_dict["id"], expires_at_dt)
+            try:
+                cursor.execute("UPDATE user_sessions SET revoked_at = ? WHERE token = ? AND revoked_at IS NULL", (now_str, token.strip()))
+                conn.commit()
+            except Exception:
+                pass
+            raise HTTPException(status_code=401, detail="Unauthorized - session has reached maximum absolute lifetime")
+
+        if created_at_dt and created_at_dt < absolute_cutoff_utc:
+            logger.warning("Session reached absolute timeout from created_at (user_id=%s, elapsed=%.1fs, max=%ds)",
+                           row_dict["id"], (now_utc - created_at_dt).total_seconds(), SESSION_ABSOLUTE_TIMEOUT_SECONDS)
+            try:
+                cursor.execute("UPDATE user_sessions SET revoked_at = ? WHERE token = ? AND revoked_at IS NULL", (now_str, token.strip()))
+                conn.commit()
+            except Exception:
+                pass
+            raise HTTPException(status_code=401, detail="Unauthorized - session has reached maximum absolute lifetime")
+
+        # 4. Check inactivity / idle expiration
+        last_act_raw = row_dict.get("last_activity_at") or row_dict.get("last_activity") or row_dict.get("created_at")
+        last_act_dt = parse_session_timestamp(last_act_raw)
+        if last_act_dt and last_act_dt < idle_cutoff_utc:
+            logger.warning("Session expired due to inactivity (user_id=%s, idle=%.1fs, max=%ds)",
+                           row_dict["id"], (now_utc - last_act_dt).total_seconds(), SESSION_IDLE_TIMEOUT_SECONDS)
+            try:
+                cursor.execute("UPDATE user_sessions SET revoked_at = ? WHERE token = ? AND revoked_at IS NULL", (now_str, token.strip()))
+                conn.commit()
+            except Exception:
+                pass
+            raise HTTPException(status_code=401, detail="Unauthorized - session expired due to inactivity")
+
+        # 5. Secure CSRF token bound to this specific session
         expected_csrf = row_dict.get("csrf_token") or generate_session_csrf_token(token.strip())
 
         # Enforce CSRF protection on state-changing requests authenticated through cookies
@@ -1591,27 +1758,66 @@ def get_authenticated_user(request: Request) -> dict:
                     detail="Invalid or mismatched CSRF token. Request rejected."
                 )
 
-        # Throttle last_activity updates to at most once every 5 minutes to avoid SQLite write lock contention
-        try:
-            last_act_str = row_dict.get("last_activity") or ""
-            should_update = True
-            if last_act_str:
-                try:
-                    last_act_dt = datetime.strptime(last_act_str, "%Y-%m-%d %H:%M:%S")
-                    if (datetime.now() - last_act_dt).total_seconds() < 300:
-                        should_update = False
-                except ValueError:
-                    pass
+        # 6. Genuine User Activity Tracking (SEC-11)
+        # Background polling, health checks, and passive endpoints MUST NOT extend idle deadlines.
+        if not is_passive_request(request):
+            should_update = False
+            if not last_act_dt:
+                should_update = True
+            elif (now_utc - last_act_dt).total_seconds() >= SESSION_TOUCH_INTERVAL_SECONDS:
+                should_update = True
 
             if should_update:
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                cursor.execute("UPDATE user_sessions SET last_activity = ? WHERE token = ?", (now_str, token.strip()))
-                conn.commit()
-        except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+                try:
+                    # Race-safe atomic update in MySQL:
+                    # 1. Session must be active (revoked_at IS NULL)
+                    # 2. Absolute expiration must not have passed (expires_at > now_str)
+                    # 3. Creation must be within absolute lifetime (created_at >= absolute_cutoff_str)
+                    # 4. Most recent activity must NOT be older than idle timeout (idle_cutoff_str)
+                    # 5. Monotonic update: last_activity_at must be NULL or strictly older than now_str
+                    cursor.execute("""
+                        UPDATE user_sessions
+                        SET last_activity = ?, last_activity_at = ?
+                        WHERE token = ?
+                          AND revoked_at IS NULL
+                          AND expires_at > ?
+                          AND created_at >= ?
+                          AND COALESCE(last_activity_at, last_activity, created_at) >= ?
+                          AND (last_activity_at IS NULL OR last_activity_at < ?)
+                    """, (now_str, now_str, token.strip(), now_str, absolute_cutoff_str, idle_cutoff_str, now_str))
+                    conn.commit()
+
+                    if cursor.rowcount == 0:
+                        # Row was not updated. Verify whether it was due to benign concurrency
+                        # (another concurrent worker already touched with a newer/equal timestamp)
+                        # or because the session expired/revoked concurrently.
+                        cursor.execute("""
+                            SELECT revoked_at, expires_at, created_at, last_activity, last_activity_at
+                            FROM user_sessions WHERE token = ?
+                        """, (token.strip(),))
+                        chk = cursor.fetchone()
+                        if not chk:
+                            raise HTTPException(status_code=401, detail="Unauthorized - invalid session")
+                        chk_dict = dict(chk)
+                        if chk_dict.get("revoked_at"):
+                            raise HTTPException(status_code=401, detail="Unauthorized - session has been revoked")
+
+                        chk_exp = parse_session_timestamp(chk_dict.get("expires_at"))
+                        chk_created = parse_session_timestamp(chk_dict.get("created_at"))
+                        if (chk_exp and now_utc >= chk_exp) or (chk_created and chk_created < absolute_cutoff_utc):
+                            raise HTTPException(status_code=401, detail="Unauthorized - session has reached maximum absolute lifetime")
+
+                        chk_last = parse_session_timestamp(chk_dict.get("last_activity_at") or chk_dict.get("last_activity") or chk_dict.get("created_at"))
+                        if chk_last and chk_last < idle_cutoff_utc:
+                            raise HTTPException(status_code=401, detail="Unauthorized - session expired due to inactivity")
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    logger.warning("Failed to persist session activity update: %s", e)
 
         return {
             "id": row_dict["id"],
@@ -1623,6 +1829,15 @@ def get_authenticated_user(request: Request) -> dict:
             "csrf_token": expected_csrf,
             "auth_via_cookie": auth_via_cookie
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.critical("Database failure during session authentication: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service is temporarily unavailable due to database maintenance. Please try again shortly.",
+            headers={"Retry-After": "30"}
+        )
     finally:
         try:
             conn.close()
@@ -1947,7 +2162,7 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
                 samesite="lax",
                 path="/",
                 secure=SESSION_COOKIE_SECURE,
-                max_age=7 * 86400
+                max_age=SESSION_ABSOLUTE_TIMEOUT_SECONDS
             )
             # Set readable CSRF cookie
             response.set_cookie(
@@ -1957,10 +2172,16 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
                 samesite="lax",
                 path="/",
                 secure=SESSION_COOKIE_SECURE,
-                max_age=7 * 86400
+                max_age=SESSION_ABSOLUTE_TIMEOUT_SECONDS
             )
 
             logger.info("User login successful: id=%s email=%s", user_dict["id"], clean_email)
+
+            # Opportunistic internal session cleanup (bounded, non-blocking)
+            try:
+                prune_expired_sessions(limit=50)
+            except Exception:
+                pass
 
             return {
                 "status": "success",
@@ -2108,6 +2329,190 @@ def logout_user(request: Request, response: Response):
     )
 
     return {"status": "success", "message": "Logged out successfully"}
+
+
+@app.get("/api/auth/session-status")
+def get_session_status(request: Request, user: dict = Depends(get_authenticated_user)):
+    """Passive session status endpoint.
+    Returns remaining idle and absolute lifetime without extending the session activity timestamp.
+    """
+    now_utc = datetime.now(timezone.utc)
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT created_at, expires_at, last_activity, last_activity_at, revoked_at
+            FROM user_sessions
+            WHERE token = ?
+        """, (user["session_token"],))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=401, detail="Unauthorized - invalid session")
+        row_dict = dict(row)
+        created_at_dt = parse_session_timestamp(row_dict.get("created_at"))
+        expires_at_dt = parse_session_timestamp(row_dict.get("expires_at"))
+        last_act_dt = parse_session_timestamp(row_dict.get("last_activity_at") or row_dict.get("last_activity"))
+
+        if not last_act_dt:
+            last_act_dt = created_at_dt or now_utc
+
+        idle_remaining = max(0, int(SESSION_IDLE_TIMEOUT_SECONDS - (now_utc - last_act_dt).total_seconds()))
+        abs_remaining = max(0, int((expires_at_dt - now_utc).total_seconds())) if expires_at_dt else SESSION_ABSOLUTE_TIMEOUT_SECONDS
+        if created_at_dt:
+            created_abs = max(0, int(SESSION_ABSOLUTE_TIMEOUT_SECONDS - (now_utc - created_at_dt).total_seconds()))
+            abs_remaining = min(abs_remaining, created_abs)
+        remaining = min(idle_remaining, abs_remaining)
+
+        return {
+            "authenticated": True,
+            "user_id": user["id"],
+            "idle_timeout_seconds": SESSION_IDLE_TIMEOUT_SECONDS,
+            "absolute_timeout_seconds": SESSION_ABSOLUTE_TIMEOUT_SECONDS,
+            "warning_seconds": SESSION_WARNING_SECONDS,
+            "idle_remaining_seconds": idle_remaining,
+            "absolute_remaining_seconds": abs_remaining,
+            "remaining_seconds": remaining,
+            "should_warn": remaining <= SESSION_WARNING_SECONDS
+        }
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/auth/session-extend")
+def extend_session(request: Request, response: Response, user: dict = Depends(get_authenticated_user)):
+    """Explicitly extend the session inactivity timeout following genuine user confirmation.
+    Requires an authenticated active session and valid CSRF token.
+    Enforces that already-expired or revoked sessions cannot be extended.
+    Cannot extend a session beyond its absolute expiration.
+    Rate-limited to prevent automated renewal abuse.
+    """
+    session_extend_limiter.check_and_record(user["id"])
+    now_utc = datetime.now(timezone.utc)
+    now_str = now_utc.strftime("%Y-%m-%d %H:%M:%S")
+    idle_cutoff_utc = now_utc - timedelta(seconds=SESSION_IDLE_TIMEOUT_SECONDS)
+    idle_cutoff_str = idle_cutoff_utc.strftime("%Y-%m-%d %H:%M:%S")
+    absolute_cutoff_utc = now_utc - timedelta(seconds=SESSION_ABSOLUTE_TIMEOUT_SECONDS)
+    absolute_cutoff_str = absolute_cutoff_utc.strftime("%Y-%m-%d %H:%M:%S")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        # Atomic extension: only succeeds if unrevoked, unexpired (absolute & created), and currently active within idle deadline
+        cursor.execute("""
+            UPDATE user_sessions
+            SET last_activity = ?, last_activity_at = ?
+            WHERE token = ?
+              AND revoked_at IS NULL
+              AND expires_at > ?
+              AND created_at >= ?
+              AND COALESCE(last_activity_at, last_activity, created_at) >= ?
+        """, (now_str, now_str, user["session_token"], now_str, absolute_cutoff_str, idle_cutoff_str))
+        conn.commit()
+
+        if cursor.rowcount == 0:
+            cursor.execute("""
+                SELECT revoked_at, expires_at, created_at, last_activity_at, last_activity
+                FROM user_sessions WHERE token = ?
+            """, (user["session_token"],))
+            chk = cursor.fetchone()
+            if not chk:
+                raise HTTPException(status_code=401, detail="Unauthorized - invalid session")
+            chk_dict = dict(chk)
+            if chk_dict.get("revoked_at"):
+                raise HTTPException(status_code=401, detail="Unauthorized - session has been revoked")
+
+            chk_exp = parse_session_timestamp(chk_dict.get("expires_at"))
+            chk_created = parse_session_timestamp(chk_dict.get("created_at"))
+            if (chk_exp and now_utc >= chk_exp) or (chk_created and chk_created < absolute_cutoff_utc):
+                raise HTTPException(status_code=401, detail="Unauthorized - session has reached maximum absolute lifetime")
+
+            chk_last = parse_session_timestamp(chk_dict.get("last_activity_at") or chk_dict.get("last_activity") or chk_dict.get("created_at"))
+            if chk_last and chk_last < idle_cutoff_utc:
+                raise HTTPException(status_code=401, detail="Unauthorized - session expired due to inactivity")
+
+            raise HTTPException(status_code=401, detail="Unauthorized - session could not be renewed")
+
+        # Determine remaining times
+        cursor.execute("SELECT expires_at, created_at FROM user_sessions WHERE token = ?", (user["session_token"],))
+        sess = cursor.fetchone()
+        sess_dict = dict(sess) if sess else {}
+        expires_at_dt = parse_session_timestamp(sess_dict.get("expires_at"))
+        created_at_dt = parse_session_timestamp(sess_dict.get("created_at"))
+
+        abs_deadline = expires_at_dt
+        if created_at_dt:
+            cand = created_at_dt + timedelta(seconds=SESSION_ABSOLUTE_TIMEOUT_SECONDS)
+            if not abs_deadline or cand < abs_deadline:
+                abs_deadline = cand
+
+        idle_remaining = SESSION_IDLE_TIMEOUT_SECONDS
+        abs_remaining = max(0, int((abs_deadline - now_utc).total_seconds())) if abs_deadline else SESSION_ABSOLUTE_TIMEOUT_SECONDS
+        remaining = min(idle_remaining, abs_remaining)
+
+        return {
+            "status": "success",
+            "message": "Session activity successfully extended.",
+            "idle_timeout_seconds": SESSION_IDLE_TIMEOUT_SECONDS,
+            "idle_remaining_seconds": idle_remaining,
+            "absolute_remaining_seconds": abs_remaining,
+            "remaining_seconds": remaining,
+            "warning_seconds": SESSION_WARNING_SECONDS
+        }
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/auth/session-cleanup")
+def cleanup_sessions_endpoint(
+    request: Request,
+    limit: int = Query(default=1000, ge=1, le=10000)
+):
+    """Administrative / background maintenance endpoint to prune expired sessions.
+    Requires administrative authorization via X-Admin-Key header matching server config.
+    Ordinary business accounts cannot execute global session maintenance (HTTP 403 Forbidden).
+    Unauthenticated requests lacking administrative authorization return HTTP 401 Unauthorized.
+    Rate-limited to protect server resources.
+    Preserves active sessions across all tenants.
+    """
+    admin_key = request.headers.get("X-Admin-Key", "").strip()
+
+    cookie_token = request.cookies.get("session_token")
+    auth_header = request.headers.get("Authorization")
+    has_user_auth = bool(cookie_token or (auth_header and auth_header.startswith("Bearer ")))
+
+    if not admin_key:
+        if has_user_auth:
+            raise HTTPException(
+                status_code=403,
+                detail="Forbidden: Administrative privilege required. Ordinary business accounts cannot execute global session maintenance."
+            )
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized: Administrative authentication required via X-Admin-Key."
+        )
+
+    if not hmac.compare_digest(admin_key, ADMIN_API_KEY):
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Invalid administrative key."
+        )
+
+    # Rate limiting for administrative cleanup
+    session_cleanup_limiter.check_and_record("admin_maintenance")
+
+    pruned = prune_expired_sessions(limit=limit)
+    return {
+        "status": "success",
+        "message": "Expired sessions pruned successfully",
+        "pruned_sessions": pruned
+    }
+
 
 
 

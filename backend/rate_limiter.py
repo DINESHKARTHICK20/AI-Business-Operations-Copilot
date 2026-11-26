@@ -885,3 +885,17 @@ analytics_limiter = ResourceRateLimiter(
     max_attempts=int(os.environ.get("RL_ANALYTICS_MAX", "40")),
     window_seconds=60
 )
+
+session_extend_limiter = ResourceRateLimiter(
+    resource_name="Session Extension",
+    max_attempts=int(os.environ.get("RL_SESSION_EXTEND_MAX", "15")),
+    window_seconds=60
+)
+
+session_cleanup_limiter = ResourceRateLimiter(
+    resource_name="Session Cleanup",
+    max_attempts=int(os.environ.get("RL_SESSION_CLEANUP_MAX", "10")),
+    window_seconds=60
+)
+
+

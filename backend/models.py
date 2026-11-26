@@ -78,13 +78,20 @@ class User(Base):
 # ============================================================
 class UserSession(Base):
     __tablename__ = "user_sessions"
-    __table_args__ = (MYSQL_TABLE_ARGS,)
+    __table_args__ = (
+        Index("idx_user_sessions_expires_at", "expires_at"),
+        Index("idx_user_sessions_last_activity", "last_activity"),
+        Index("idx_user_sessions_last_activity_at", "last_activity_at"),
+        Index("idx_user_sessions_revoked_at", "revoked_at"),
+        MYSQL_TABLE_ARGS,
+    )
 
     token: Mapped[str] = mapped_column(String(128), primary_key=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     last_activity: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    last_activity_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     csrf_token: Mapped[str] = mapped_column(String(128), default="", server_default="")
 
