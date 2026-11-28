@@ -69,12 +69,16 @@ export interface InvoiceItem {
 
 export interface Invoice {
   id: string;
+  invoice_number?: string;
+  customer_id?: number;
+  idempotency_key?: string;
+  created_at?: string;
   client: string;
   amount: string;
   amount_num?: number;
   due: string;
   issued: string;
-  status: "Paid" | "Pending" | "Overdue" | "Draft";
+  status: "Paid" | "Pending" | "Overdue" | "Draft" | "Cancelled";
   items?: string;
   subtotal?: number;
   tax?: number;
@@ -437,6 +441,10 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
       throw new Error(detail || "Request payload is too large. Please reduce the data size and try again.");
     }
 
+    if (res.status === 409) {
+      throw new Error(errorJson?.detail || errorJson?.message || "A duplicate record conflict occurred. Please check your inputs.");
+    }
+
     if (res.status === 422) {
       if (Array.isArray(errorJson?.detail)) {
         const issues = errorJson.detail.map((d: any) => d.msg || JSON.stringify(d)).join("; ");
@@ -668,21 +676,35 @@ export const api = {
   },
 
   async createInvoice(invoice: Partial<Invoice> & { line_items?: Array<{ product_id: number; quantity: number; unit_price?: number; product_name?: string }> }): Promise<Invoice> {
+    // Strip any client-supplied internal identifier or ownership field; server generates PK & assigns tenant
+    const { id: _ignoredId, user_id: _ignoredUid, ...safePayload } = invoice as any;
+    const headers: Record<string, string> = {};
+    if (safePayload.idempotency_key) {
+      headers["X-Idempotency-Key"] = String(safePayload.idempotency_key);
+    }
     return request<Invoice>("/api/invoices", {
       method: "POST",
-      body: JSON.stringify(invoice),
+      headers,
+      body: JSON.stringify(safePayload),
+    });
+  },
+
+  async updateInvoice(id: string, updates: { invoice_number?: string; due?: string; issued?: string; status?: string }): Promise<Invoice> {
+    return request<Invoice>(`/api/invoices/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(updates),
     });
   },
 
   async updateInvoiceStatus(id: string, status: string): Promise<Invoice> {
-    return request<Invoice>(`/api/invoices/${id}/status`, {
+    return request<Invoice>(`/api/invoices/${encodeURIComponent(id)}/status`, {
       method: "PATCH",
       body: JSON.stringify({ status }),
     });
   },
 
   async deleteInvoice(id: string): Promise<{ status: string; deleted_id: string }> {
-    return request(`/api/invoices/${id}`, {
+    return request(`/api/invoices/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
   },

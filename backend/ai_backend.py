@@ -1,5 +1,6 @@
 import os
 import time
+import uuid
 import asyncio
 from pathlib import Path
 import sys
@@ -236,6 +237,9 @@ def init_db():
     CREATE TABLE IF NOT EXISTS invoices (
         id TEXT PRIMARY KEY,
         user_id INTEGER DEFAULT 1,
+        customer_id INTEGER,
+        invoice_number TEXT,
+        idempotency_key TEXT,
         client TEXT NOT NULL,
         amount TEXT NOT NULL,
         amount_num REAL DEFAULT 0.0,
@@ -246,7 +250,17 @@ def init_db():
         subtotal REAL DEFAULT 0.0,
         tax REAL DEFAULT 0.0,
         discount REAL DEFAULT 0.0,
-        total REAL DEFAULT 0.0
+        total REAL DEFAULT 0.0,
+        created_at TEXT
+    )
+    """)
+
+    # Invoice Sequences Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS invoice_sequences (
+        user_id INTEGER PRIMARY KEY,
+        last_number INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT
     )
     """)
 
@@ -339,6 +353,18 @@ def init_db():
         cursor.execute("ALTER TABLE invoices ADD COLUMN discount REAL DEFAULT 0.0")
     if "total" not in inv_cols:
         cursor.execute("ALTER TABLE invoices ADD COLUMN total REAL DEFAULT 0.0")
+    if "customer_id" not in inv_cols:
+        cursor.execute("ALTER TABLE invoices ADD COLUMN customer_id INTEGER")
+    if "invoice_number" not in inv_cols:
+        cursor.execute("ALTER TABLE invoices ADD COLUMN invoice_number TEXT")
+        cursor.execute("UPDATE invoices SET invoice_number = id WHERE invoice_number IS NULL")
+    if "idempotency_key" not in inv_cols:
+        cursor.execute("ALTER TABLE invoices ADD COLUMN idempotency_key TEXT")
+    if "created_at" not in inv_cols:
+        cursor.execute("ALTER TABLE invoices ADD COLUMN created_at TEXT")
+
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_invoices_user_number ON invoices(user_id, invoice_number)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_invoices_user_idempotency ON invoices(user_id, idempotency_key)")
 
     # Create indexes for multi-tenant isolation performance
     indexes = [
@@ -501,16 +527,17 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM invoices")
     if cursor.fetchone()[0] == 0:
         initial_invoices = [
-            ("INV-2026-001", "TechCorp India Pvt. Ltd", "₹1,03,500", 103500.0, "Aug 15, 2026", "Jul 15, 2026", "Paid", "Enterprise Suite Pro — 1 seat", 103500.0, 0.0, 0.0, 103500.0),
-            ("INV-2026-002", "DataFlow Systems", "₹72,800", 72800.0, "Aug 22, 2026", "Jul 22, 2026", "Pending", "Hardware Sensor Kit & Support", 72800.0, 0.0, 0.0, 72800.0),
-            ("INV-2026-003", "CloudShift India", "₹26,600", 26600.0, "Jul 30, 2026", "Jun 30, 2026", "Overdue", "Cloud Storage 1TB (Annual)", 26600.0, 0.0, 0.0, 26600.0),
-            ("INV-2026-004", "Nexa Labs Chennai", "₹1,80,000", 180000.0, "Sep 1, 2026", "Aug 1, 2026", "Draft", "Enterprise Analytics Suite", 180000.0, 0.0, 0.0, 180000.0),
-            ("INV-2026-005", "BuildFast Solutions", "₹56,700", 56700.0, "Aug 10, 2026", "Jul 10, 2026", "Paid", "API Access Tokens & Cloud Storage", 56700.0, 0.0, 0.0, 56700.0)
+            ("INV-2026-001", "INV-2026-001", "TechCorp India Pvt. Ltd", "₹1,03,500", 103500.0, "Aug 15, 2026", "Jul 15, 2026", "Paid", "Enterprise Suite Pro — 1 seat", 103500.0, 0.0, 0.0, 103500.0),
+            ("INV-2026-002", "INV-2026-002", "DataFlow Systems", "₹72,800", 72800.0, "Aug 22, 2026", "Jul 22, 2026", "Pending", "Hardware Sensor Kit & Support", 72800.0, 0.0, 0.0, 72800.0),
+            ("INV-2026-003", "INV-2026-003", "CloudShift India", "₹26,600", 26600.0, "Jul 30, 2026", "Jun 30, 2026", "Overdue", "Cloud Storage 1TB (Annual)", 26600.0, 0.0, 0.0, 26600.0),
+            ("INV-2026-004", "INV-2026-004", "Nexa Labs Chennai", "₹1,80,000", 180000.0, "Sep 1, 2026", "Aug 1, 2026", "Draft", "Enterprise Analytics Suite", 180000.0, 0.0, 0.0, 180000.0),
+            ("INV-2026-005", "INV-2026-005", "BuildFast Solutions", "₹56,700", 56700.0, "Aug 10, 2026", "Jul 10, 2026", "Paid", "API Access Tokens & Cloud Storage", 56700.0, 0.0, 0.0, 56700.0)
         ]
         cursor.executemany("""
-        INSERT INTO invoices (id, client, amount, amount_num, due, issued, status, items, subtotal, tax, discount, total)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO invoices (id, invoice_number, client, amount, amount_num, due, issued, status, items, subtotal, tax, discount, total)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, initial_invoices)
+        cursor.execute("INSERT OR IGNORE INTO invoice_sequences (user_id, last_number) VALUES (1, 5)")
 
     cursor.execute("SELECT COUNT(*) FROM invoice_items")
     if cursor.fetchone()[0] == 0:
@@ -610,7 +637,7 @@ app.add_middleware(
     allow_origins=DEV_DEFAULT_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allow_headers=["Content-Type", "X-CSRF-Token", "X-XSRF-Token", "Authorization", "Accept", "X-Requested-With", "X-Passive-Polling", "X-Admin-Key"],
+    allow_headers=["Content-Type", "X-CSRF-Token", "X-XSRF-Token", "Authorization", "Accept", "X-Requested-With", "X-Passive-Polling", "X-Admin-Key", "X-Idempotency-Key", "Idempotency-Key"],
     expose_headers=["Retry-After", "Content-Disposition", "X-CSRF-Token"]
 )
 
@@ -1233,30 +1260,40 @@ class ProductUpdate(BaseModel):
 
 
 class InvoiceItemInput(BaseModel):
-    product_id: int
-    quantity: int = Field(gt=0, description="Quantity must be greater than 0")
-    unit_price: Optional[float] = None
-    product_name: Optional[str] = None
+    product_id: int = Field(gt=0, description="Product ID must be greater than 0")
+    quantity: int = Field(gt=0, le=1000000, description="Quantity must be greater than 0")
+    unit_price: Optional[float] = Field(default=None, ge=0.0)
+    product_name: Optional[str] = Field(default=None, max_length=255)
 
 
 class InvoiceCreate(BaseModel):
     id: Optional[str] = None
-    client: str
-    amount: Optional[str] = None
-    amount_num: Optional[float] = 0.0
-    due: Optional[str] = None
-    issued: Optional[str] = None
-    status: Optional[str] = "Pending"
-    items: Optional[str] = ""
-    subtotal: Optional[float] = None
-    tax: Optional[float] = 0.0
-    discount: Optional[float] = 0.0
-    total: Optional[float] = None
+    invoice_number: Optional[str] = Field(default=None, max_length=128)
+    idempotency_key: Optional[str] = Field(default=None, max_length=128)
+    customer_id: Optional[int] = Field(default=None, gt=0)
+    client: Optional[str] = Field(default="", max_length=255)
+    amount: Optional[str] = Field(default=None, max_length=64)
+    amount_num: Optional[float] = Field(default=None, ge=0.0)
+    due: Optional[str] = Field(default=None, max_length=64)
+    issued: Optional[str] = Field(default=None, max_length=64)
+    status: Optional[str] = Field(default="Pending", max_length=32)
+    items: Optional[str] = Field(default="", max_length=2000)
+    subtotal: Optional[float] = Field(default=None, ge=0.0)
+    tax: Optional[float] = Field(default=0.0, ge=0.0, le=100.0)
+    discount: Optional[float] = Field(default=0.0, ge=0.0)
+    total: Optional[float] = Field(default=None, ge=0.0)
     line_items: Optional[List[InvoiceItemInput]] = None
 
 
+class InvoiceUpdate(BaseModel):
+    invoice_number: Optional[str] = Field(default=None, max_length=128)
+    due: Optional[str] = Field(default=None, max_length=64)
+    issued: Optional[str] = Field(default=None, max_length=64)
+    status: Optional[str] = Field(default=None, max_length=32)
+
+
 class InvoiceStatusUpdate(BaseModel):
-    status: str
+    status: str = Field(min_length=1, max_length=32)
 
 
 class CopilotChatRequest(BaseModel):
@@ -1495,19 +1532,15 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         if hashed_password.startswith(("$2b$", "$2a$", "$2y$")):
             pw_bytes = plain_password.encode("utf-8")
             hashed_bytes = hashed_password.encode("utf-8")
-            # 1. Standard check for passwords <= 72 bytes
+            # Standard check for passwords <= 72 bytes (executes bcrypt exactly once)
             if len(pw_bytes) <= 72:
-                if bcrypt.checkpw(pw_bytes, hashed_bytes):
-                    return True
-            # 2. SHA-256 pre-hashed check for long passphrases (> 72 bytes)
+                return bcrypt.checkpw(pw_bytes, hashed_bytes)
+            # SHA-256 pre-hashed check for long passphrases (> 72 bytes)
             prehashed = hashlib.sha256(pw_bytes).digest()
             if bcrypt.checkpw(prehashed, hashed_bytes):
                 return True
-            # 3. Truncated 72-byte fallback if previously hashed via truncation
-            if len(pw_bytes) > 72:
-                if bcrypt.checkpw(pw_bytes[:72], hashed_bytes):
-                    return True
-            return False
+            # Truncated 72-byte fallback if previously hashed via truncation
+            return bcrypt.checkpw(pw_bytes[:72], hashed_bytes)
 
         if ":" in hashed_password:
             salt, h = hashed_password.split(":", 1)
@@ -1516,6 +1549,22 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return plain_password == hashed_password
     except Exception:
         return False
+
+
+# Constant bcrypt-12 hash used to equalize execution timing on authentication failure
+# for nonexistent accounts or accounts without valid stored hashes (SEC-12).
+DUMMY_BCRYPT_HASH = "$2b$12$Iw/dDnjia7OS3RC9CzOIZeH0YvbUZdZtVSBd/v5JF7IorTZ8a/83a"
+
+def dummy_verify_password(plain_password: str) -> bool:
+    """Execute dummy bcrypt-12 verification to equalize timing for nonexistent accounts."""
+    try:
+        pw_bytes = plain_password.encode("utf-8")
+        if len(pw_bytes) > 72:
+            pw_bytes = hashlib.sha256(pw_bytes).digest()
+        bcrypt.checkpw(pw_bytes, DUMMY_BCRYPT_HASH.encode("utf-8"))
+    except Exception:
+        pass
+    return False
 
 
 PASSIVE_POLLING_PATHS = {
@@ -1875,30 +1924,51 @@ def get_csrf_token(request: Request, response: Response):
 
 
 @app.get("/api/auth/rate-limit-status")
-def get_rate_limit_status(request: Request, email: Optional[str] = Query(default=None)):
-    """Developer-friendly endpoint to inspect rate-limit state for the caller's IP.
-
-    Returns lockout info without exposing passwords, tokens, or other users' data.
-    Optionally pass ?email=user@example.com to check the per-account lockout too.
+def get_rate_limit_status(
+    request: Request,
+    response: Response,
+    email: Optional[str] = Query(default=None),
+    user: dict = Depends(get_authenticated_user)
+):
+    """Secure, privacy-hardened rate-limit status endpoint (SEC-12).
+    - Requires genuine authentication (HTTP 401 Unauthorized for unauthenticated callers).
+    - Cross-account probing is strictly prohibited: callers can only inspect their own account.
+    - If ?email= is supplied and does not match the authenticated user, returns HTTP 403 Forbidden.
+    - Exposes only safe client-facing tier information without revealing internal counters,
+      lockout states of other accounts, or brute-force tracking metrics.
+    - Prohibits sensitive response caching with strict Cache-Control headers.
     """
     client_ip = get_client_ip(request)
+    auth_email = user["email"].strip().lower()
+
+    if email:
+        clean_email = email.strip().lower()
+        if clean_email != auth_email:
+            logger.warning(
+                "Cross-account rate-limit inspection blocked: user_id=%s (%s) attempted to query %s",
+                user["id"], auth_email, clean_email
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Forbidden: Cross-account rate-limit inspection is strictly prohibited."
+            )
+
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+    response.headers["Pragma"] = "no-cache"
+
+    rate_key = f"{client_ip}:{auth_email}"
     try:
         ip_status = login_limiter.get_status(client_ip, threshold=login_limiter.max_attempts_per_ip)
+        key_status = login_limiter.get_status(rate_key, threshold=login_limiter.max_attempts_per_key)
+        acc_global_status = login_limiter.get_status_account(auth_email)
 
-        result = {
+        return {
             "ip": client_ip,
+            "authenticated_email": auth_email,
             "ip_rate_limit": ip_status,
+            "account_rate_limit": key_status,
+            "account_distributed_rate_limit": acc_global_status,
         }
-
-        if email:
-            clean_email = email.strip().lower()
-            rate_key = f"{client_ip}:{clean_email}"
-            key_status = login_limiter.get_status(rate_key, threshold=login_limiter.max_attempts_per_key)
-            acc_global_status = login_limiter.get_status_account(clean_email)
-            result["account_rate_limit"] = key_status
-            result["account_distributed_rate_limit"] = acc_global_status
-
-        return result
     except RateLimitStorageError as rse:
         logger.error("Rate limit storage error during status check: %s", rse)
         raise HTTPException(
@@ -2045,7 +2115,7 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
             wait_min = max(1, remaining // 60)
             raise HTTPException(
                 status_code=429,
-                detail=f"Too many failed login attempts for this account. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
+                detail=f"Too many failed login attempts. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
                 headers={"Retry-After": str(max(1, remaining))}
             )
         if login_limiter.is_rate_limited_account(clean_email):
@@ -2053,7 +2123,7 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
             wait_min = max(1, remaining // 60)
             raise HTTPException(
                 status_code=429,
-                detail=f"Too many failed login attempts for this account across multiple locations. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
+                detail=f"Too many failed login attempts. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
                 headers={"Retry-After": str(max(1, remaining))}
             )
         if login_limiter.is_rate_limited_ip(client_ip):
@@ -2075,7 +2145,7 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
             wait_min = max(1, remaining // 60)
             raise HTTPException(
                 status_code=429,
-                detail=f"Too many failed login attempts for this account. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
+                detail=f"Too many failed login attempts. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
                 headers={"Retry-After": str(max(1, remaining))}
             )
         if acc_global_attempt > login_limiter.max_attempts_per_account:
@@ -2083,7 +2153,7 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
             wait_min = max(1, remaining // 60)
             raise HTTPException(
                 status_code=429,
-                detail=f"Too many failed login attempts for this account across multiple locations. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
+                detail=f"Too many failed login attempts. Please try again in {wait_min} minute{'s' if remaining > 60 else ''}.",
                 headers={"Retry-After": str(max(1, remaining))}
             )
         if ip_attempt > login_limiter.max_attempts_per_ip:
@@ -2107,7 +2177,15 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
     # Retry loop with backoff for SQLite transient busy / lock conditions
     max_retries = 3
     for attempt in range(max_retries):
-        conn = get_db()
+        try:
+            conn = get_db()
+        except Exception as e:
+            logger.critical("Database failure connecting for login authentication: %s", e)
+            raise HTTPException(
+                status_code=503,
+                detail="Authentication service is temporarily unavailable due to database maintenance. Please try again shortly.",
+                headers={"Retry-After": "30"}
+            )
         cursor = conn.cursor()
         try:
             cursor.execute("""
@@ -2118,22 +2196,24 @@ def login_user(req: UserLoginRequest, request: Request, response: Response):
             user_row = cursor.fetchone()
 
             if not user_row:
+                dummy_verify_password(raw_password)
                 raise HTTPException(status_code=401, detail="Invalid email or password.")
 
             user_dict = dict(user_row)
-            if user_dict.get("is_active") == 0:
-                raise HTTPException(status_code=401, detail="Account is disabled.")
-
             stored_hash = user_dict.get("password_hash") or user_dict.get("password") or ""
 
             if not stored_hash:
                 logger.warning(
-                    "Login attempt for account %s has no password hash stored. "
-                    "This account cannot be authenticated until a password is set.",
+                    "Login attempt for account %s has no password hash stored.",
                     clean_email
                 )
+                dummy_verify_password(raw_password)
+                raise HTTPException(status_code=401, detail="Invalid email or password.")
 
             if not verify_password(raw_password, stored_hash):
+                raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+            if user_dict.get("is_active") == 0:
                 raise HTTPException(status_code=401, detail="Invalid email or password.")
 
             # Reset rate limiting counter on success
@@ -3207,6 +3287,129 @@ def predict_inventory(request: InventoryRequest, user: dict = Depends(get_authen
 # 4. INVOICES APIS (MULTI-TENANT & ATOMIC STOCK DEDUCTION)
 # ============================================================
 
+_INVOICE_NUMBER_REGEX = re.compile(r"^[A-Za-z0-9\-_/. ]{1,64}$")
+_ALLOWED_INVOICE_STATUSES = {
+    "paid": "Paid",
+    "pending": "Pending",
+    "overdue": "Overdue",
+    "draft": "Draft",
+    "cancelled": "Cancelled",
+}
+
+
+def _generate_server_invoice_id() -> str:
+    """Generate a globally unique, non-sequential server-side internal invoice PK."""
+    return f"inv_{uuid.uuid4().hex}"
+
+
+def _normalize_invoice_status(raw_status: Optional[str]) -> str:
+    """Validate and canonicalize invoice status or raise HTTP 422."""
+    val = (raw_status if raw_status is not None else "Pending").strip().lower()
+    if val not in _ALLOWED_INVOICE_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid invoice status. Allowed values: Paid, Pending, Overdue, Draft, Cancelled."
+        )
+    return _ALLOWED_INVOICE_STATUSES[val]
+
+
+def _validate_invoice_number(raw_number: Optional[str]) -> Optional[str]:
+    """Validate optional business-facing invoice number or raise HTTP 422."""
+    if raw_number is None:
+        return None
+    clean = raw_number.strip()
+    if not clean:
+        raise HTTPException(status_code=422, detail="Invoice number cannot be blank whitespace.")
+    if not _INVOICE_NUMBER_REGEX.match(clean):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid invoice number format. Use 1-64 alphanumeric, dash, underscore, dot, or slash characters."
+        )
+    return clean
+
+
+def _compute_stock_status(stock: int, reorder: int) -> str:
+    """Determine inventory stock health badge consistently."""
+    if stock <= 0:
+        return "Out of Stock"
+    if stock <= reorder * 0.3:
+        return "Critical"
+    if stock <= reorder:
+        return "Low Stock"
+    return "In Stock"
+
+
+def _fetch_invoice_with_items(cursor, invoice_id: str, user_id: int) -> Optional[dict]:
+    """Fetch a single tenant-owned invoice and its line items, normalizing invoice_number."""
+    cursor.execute("SELECT * FROM invoices WHERE id = ? AND user_id = ?", (invoice_id, user_id))
+    row = cursor.fetchone()
+    if not row:
+        return None
+    inv_data = dict(row)
+    inv_data["invoice_number"] = inv_data.get("invoice_number") or inv_data["id"]
+    cursor.execute("SELECT * FROM invoice_items WHERE invoice_id = ? AND user_id = ?", (invoice_id, user_id))
+    inv_data["line_items"] = [dict(item) for item in cursor.fetchall()]
+    return inv_data
+
+
+def _allocate_tenant_invoice_number(cursor, user_id: int) -> str:
+    """Concurrency-safe atomic per-tenant sequential business invoice number generator.
+    Locks the tenant row in invoice_sequences (InnoDB FOR UPDATE) to eliminate races and
+    prevent reuse of issued/deleted invoice numbers across concurrent requests and workers.
+    """
+    is_mysql = is_mysql_mode()
+    lock_clause = " FOR UPDATE" if is_mysql else ""
+
+    cursor.execute(f"SELECT last_number FROM invoice_sequences WHERE user_id = ?{lock_clause}", (user_id,))
+    seq_row = cursor.fetchone()
+
+    if not seq_row:
+        # First invoice for this tenant under sequence tracking: seed from any historical rows safely
+        cursor.execute("SELECT id, invoice_number FROM invoices WHERE user_id = ?", (user_id,))
+        existing_rows = cursor.fetchall()
+        seed_val = len(existing_rows)
+        for r in existing_rows:
+            r_dict = dict(r)
+            num_str = str(r_dict.get("invoice_number") or r_dict.get("id") or "")
+            m = re.search(r"(\d+)$", num_str.strip())
+            if m:
+                seed_val = max(seed_val, int(m.group(1)))
+
+        if is_mysql:
+            cursor.execute(
+                "INSERT IGNORE INTO invoice_sequences (user_id, last_number) VALUES (?, ?)",
+                (user_id, seed_val)
+            )
+        else:
+            cursor.execute(
+                "INSERT OR IGNORE INTO invoice_sequences (user_id, last_number) VALUES (?, ?)",
+                (user_id, seed_val)
+            )
+        cursor.execute(f"SELECT last_number FROM invoice_sequences WHERE user_id = ?{lock_clause}", (user_id,))
+        seq_row = cursor.fetchone()
+
+    current_num = int(dict(seq_row)["last_number"]) if seq_row else 0
+    candidate_num = current_num + 1
+    year_str = datetime.now(timezone.utc).strftime("%Y")
+
+    while True:
+        candidate_str = f"INV-{year_str}-{candidate_num:03d}"
+        cursor.execute(
+            "SELECT 1 FROM invoices WHERE user_id = ? AND (invoice_number = ? OR id = ?)",
+            (user_id, candidate_str, candidate_str)
+        )
+        if not cursor.fetchone():
+            break
+        candidate_num += 1
+
+    now_utc_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute(
+        "UPDATE invoice_sequences SET last_number = ?, updated_at = ? WHERE user_id = ?",
+        (candidate_num, now_utc_str, user_id)
+    )
+    return candidate_str
+
+
 @app.get("/api/invoices")
 def get_invoices(
     limit: int = Query(default=100, ge=1, le=500, description="Maximum number of invoices to return"),
@@ -3214,33 +3417,41 @@ def get_invoices(
     user: dict = Depends(get_authenticated_user)
 ):
     conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM invoices WHERE user_id = ? ORDER BY issued DESC, id DESC LIMIT ? OFFSET ?", (user["id"], limit, offset))
-    rows = [dict(r) for r in cursor.fetchall()]
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM invoices WHERE user_id = ? ORDER BY created_at DESC, issued DESC, id DESC LIMIT ? OFFSET ?",
+            (user["id"], limit, offset)
+        )
+        rows = [dict(r) for r in cursor.fetchall()]
 
-    for row in rows:
-        cursor.execute("SELECT * FROM invoice_items WHERE invoice_id = ? AND user_id = ?", (row["id"], user["id"]))
-        row["line_items"] = [dict(item) for item in cursor.fetchall()]
+        for row in rows:
+            row["invoice_number"] = row.get("invoice_number") or row["id"]
+            cursor.execute("SELECT * FROM invoice_items WHERE invoice_id = ? AND user_id = ?", (row["id"], user["id"]))
+            row["line_items"] = [dict(item) for item in cursor.fetchall()]
 
-    conn.close()
-    return rows
+        return rows
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.get("/api/invoices/{invoice_id}")
 def get_invoice(invoice_id: str, user: dict = Depends(get_authenticated_user)):
     conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM invoices WHERE id = ? AND user_id = ?", (invoice_id, user["id"]))
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Invoice not found")
-
-    inv_data = dict(row)
-    cursor.execute("SELECT * FROM invoice_items WHERE invoice_id = ? AND user_id = ?", (invoice_id, user["id"]))
-    inv_data["line_items"] = [dict(item) for item in cursor.fetchall()]
-    conn.close()
-    return inv_data
+    try:
+        cursor = conn.cursor()
+        inv_data = _fetch_invoice_with_items(cursor, invoice_id, user["id"])
+        if not inv_data:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        return inv_data
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def generate_invoice_pdf_bytes(inv: dict, line_items: list, customer: dict = None) -> bytes:
@@ -3262,9 +3473,10 @@ def generate_invoice_pdf_bytes(inv: dict, line_items: list, customer: dict = Non
     page.insert_text((55, 84), "Enterprise Cloud, AI & Business Automation Suite", fontsize=9, fontname="helv", color=MUTED_TEXT)
     page.insert_text((55, 98), "GSTIN: 06AAACB1234D1Z9  |  billing@bizops.in  |  Tel: +91 124 456 7890", fontsize=8, fontname="helv", color=MUTED_TEXT)
 
-    # Invoice Title & ID
+    # Invoice Title & Number
+    display_inv_num = inv.get("invoice_number") or inv.get("id", "N/A")
     page.insert_text((410, 68), "TAX INVOICE", fontsize=16, fontname="hebo", color=PRIMARY)
-    page.insert_text((410, 84), f"Invoice #: {inv.get('id', 'N/A')}", fontsize=10, fontname="hebo", color=DARK_TEXT)
+    page.insert_text((410, 84), f"Invoice #: {display_inv_num}", fontsize=10, fontname="hebo", color=DARK_TEXT)
 
     # Status Badge
     raw_status = (inv.get("status") or "PENDING").upper()
@@ -3374,21 +3586,36 @@ def get_invoice_pdf(invoice_id: str, user: dict = Depends(get_authenticated_user
     pdf_limiter.check_and_record(user["id"])
     with ConcurrencyGuard(resource_type="pdf_gen", user_id=user["id"], op_name="PDF generation") as guard:
         conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM invoices WHERE id = ? AND user_id = ?", (invoice_id, user["id"]))
-        row = cursor.fetchone()
-        if not row:
-            conn.close()
-            raise HTTPException(status_code=404, detail="Invoice not found or access denied")
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM invoices WHERE id = ? AND user_id = ?", (invoice_id, user["id"]))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Invoice not found or access denied")
 
-        inv_data = dict(row)
-        cursor.execute("SELECT * FROM invoice_items WHERE invoice_id = ? AND user_id = ?", (invoice_id, user["id"]))
-        line_items = [dict(it) for it in cursor.fetchall()]
+            inv_data = dict(row)
+            inv_data["invoice_number"] = inv_data.get("invoice_number") or inv_data["id"]
+            cursor.execute("SELECT * FROM invoice_items WHERE invoice_id = ? AND user_id = ?", (invoice_id, user["id"]))
+            line_items = [dict(it) for it in cursor.fetchall()]
 
-        cursor.execute("SELECT * FROM customers WHERE name = ? AND user_id = ?", (inv_data.get("client"), user["id"]))
-        cust_row = cursor.fetchone()
-        customer = dict(cust_row) if cust_row else None
-        conn.close()
+            customer = None
+            if inv_data.get("customer_id"):
+                cursor.execute("SELECT * FROM customers WHERE id = ? AND user_id = ?", (inv_data["customer_id"], user["id"]))
+                cust_row = cursor.fetchone()
+                if cust_row:
+                    customer = dict(cust_row)
+            if not customer:
+                cursor.execute(
+                    "SELECT * FROM customers WHERE (name = ? OR company = ?) AND user_id = ?",
+                    (inv_data.get("client"), inv_data.get("client"), user["id"])
+                )
+                cust_row = cursor.fetchone()
+                customer = dict(cust_row) if cust_row else None
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
         def _render_pdf():
             return generate_invoice_pdf_bytes(inv_data, line_items, customer)
@@ -3401,8 +3628,8 @@ def get_invoice_pdf(invoice_id: str, user: dict = Depends(get_authenticated_user
             logger.error("PDF generation failed for invoice %s: %s", invoice_id, e, exc_info=True)
             raise HTTPException(status_code=500, detail="Failed to generate invoice PDF document.")
 
-        clean_id = re.sub(r'[^a-zA-Z0-9_\-]', '_', invoice_id)
-        filename = f"Invoice_{clean_id}.pdf"
+        clean_num = re.sub(r'[^a-zA-Z0-9_\-]', '_', str(inv_data.get("invoice_number") or invoice_id))
+        filename = f"Invoice_{clean_num}.pdf"
 
         return Response(
             content=pdf_bytes,
@@ -3450,11 +3677,11 @@ def global_search(
 
     # 3. Invoices
     cursor.execute("""
-        SELECT id, client, amount, amount_num, due, issued, status, items
+        SELECT id, COALESCE(invoice_number, id) AS invoice_number, client, amount, amount_num, due, issued, status, items
         FROM invoices
-        WHERE user_id = ? AND (id LIKE ? OR client LIKE ? OR status LIKE ? OR items LIKE ?)
+        WHERE user_id = ? AND (id LIKE ? OR invoice_number LIKE ? OR client LIKE ? OR status LIKE ? OR items LIKE ?)
         LIMIT 10
-    """, (user["id"], term, term, term, term))
+    """, (user["id"], term, term, term, term, term))
     invoices = [dict(r) for r in cursor.fetchall()]
 
     # 4. Employees
@@ -3482,70 +3709,144 @@ def global_search(
 
 
 @app.post("/api/invoices")
-def create_invoice(inv: InvoiceCreate, user: dict = Depends(get_authenticated_user)):
+def create_invoice(request: Request, inv: InvoiceCreate, user: dict = Depends(get_authenticated_user)):
+    # 0. Strict Pre-DB Input Validation (HTTP 422)
+    raw_idem = (
+        request.headers.get("X-Idempotency-Key")
+        or request.headers.get("Idempotency-Key")
+        or inv.idempotency_key
+    )
+    clean_idem: Optional[str] = None
+    if raw_idem is not None:
+        clean_idem = raw_idem.strip() or None
+        if clean_idem and len(clean_idem) > 128:
+            raise HTTPException(status_code=422, detail="Idempotency key must not exceed 128 characters.")
+
+    norm_status = _normalize_invoice_status(inv.status)
+    custom_inv_number = _validate_invoice_number(inv.invoice_number)
+
+    clean_client = (inv.client or "").strip()
+    if not inv.customer_id and not clean_client:
+        raise HTTPException(status_code=422, detail="Customer ID or client name is required.")
+
+    tax_pct = float(inv.tax or 0.0)
+    discount_amount = float(inv.discount or 0.0)
+    if tax_pct < 0 or tax_pct > 100:
+        raise HTTPException(status_code=422, detail="Tax rate must be between 0 and 100.")
+    if discount_amount < 0:
+        raise HTTPException(status_code=422, detail="Discount cannot be negative.")
+
+    manual_subtotal = 0.0
+    if not inv.line_items or len(inv.line_items) == 0:
+        if inv.subtotal is not None:
+            manual_subtotal = float(inv.subtotal)
+        elif inv.amount is not None and str(inv.amount).strip() != "":
+            cleaned_amt = str(inv.amount).replace("₹", "").replace("$", "").replace(",", "").strip()
+            try:
+                manual_subtotal = float(cleaned_amt)
+            except ValueError:
+                raise HTTPException(status_code=422, detail="Invalid invoice amount format.")
+        elif inv.amount_num is not None:
+            manual_subtotal = float(inv.amount_num)
+        else:
+            raise HTTPException(status_code=422, detail="Invoice must contain line items or a valid amount.")
+
+        if manual_subtotal < 0:
+            raise HTTPException(status_code=422, detail="Invoice amount cannot be negative.")
+
     conn = get_db()
     cursor = conn.cursor()
 
     try:
-        # 1. Validate Customer ownership
-        clean_client = (inv.client or "").strip()
-        if not clean_client:
-            raise HTTPException(status_code=400, detail="Customer / Client name is required.")
+        # 1. Duplicate Submission Protection via Idempotency Key
+        if clean_idem:
+            cursor.execute(
+                "SELECT id FROM invoices WHERE user_id = ? AND idempotency_key = ?",
+                (user["id"], clean_idem)
+            )
+            existing_idem = cursor.fetchone()
+            if existing_idem:
+                existing_inv = _fetch_invoice_with_items(cursor, existing_idem[0], user["id"])
+                if existing_inv:
+                    return existing_inv
 
-        cursor.execute("""
-        SELECT id, name, company, orders, total_spend
-        FROM customers
-        WHERE user_id = ? AND (LOWER(name) = LOWER(?) OR LOWER(company) = LOWER(?))
-        """, (user["id"], clean_client, clean_client))
-        customer = cursor.fetchone()
-        if not customer:
+        # 2. Validate Customer Ownership (rejects cross-tenant customer references)
+        if inv.customer_id is not None:
             cursor.execute("""
-            SELECT id, name, company, orders, total_spend
-            FROM customers
-            WHERE user_id = ? AND (LOWER(company) LIKE LOWER(?) OR LOWER(name) LIKE LOWER(?))
-            """, (user["id"], f"%{clean_client}%", f"%{clean_client}%"))
+                SELECT id, name, company, orders, total_spend
+                FROM customers
+                WHERE id = ? AND user_id = ?
+            """, (inv.customer_id, user["id"]))
             customer = cursor.fetchone()
             if not customer:
-                raise HTTPException(status_code=400, detail=f"Customer '{clean_client}' does not exist in your customers list.")
+                raise HTTPException(status_code=404, detail="Customer not found for this business account.")
+            cust_data = dict(customer)
+            if not clean_client:
+                clean_client = cust_data.get("company") or cust_data.get("name") or ""
+        else:
+            cursor.execute("""
+                SELECT id, name, company, orders, total_spend
+                FROM customers
+                WHERE user_id = ? AND (LOWER(name) = LOWER(?) OR LOWER(company) = LOWER(?))
+            """, (user["id"], clean_client, clean_client))
+            customer = cursor.fetchone()
+            if not customer:
+                cursor.execute("""
+                    SELECT id, name, company, orders, total_spend
+                    FROM customers
+                    WHERE user_id = ? AND (LOWER(company) LIKE LOWER(?) OR LOWER(name) LIKE LOWER(?))
+                """, (user["id"], f"%{clean_client}%", f"%{clean_client}%"))
+                customer = cursor.fetchone()
+            if not customer:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Customer '{clean_client}' not found in your business account."
+                )
+            cust_data = dict(customer)
 
-        cust_data = dict(customer)
-
-        # 2. Process & Validate Line Items
+        # 3. Validate & Lock Product Ownership + Stock (Deadlock-safe sorted product_id order)
         processed_items = []
+        stock_deductions: Dict[int, Dict[str, Any]] = {}
         subtotal = 0.0
         item_descriptions = []
 
         if inv.line_items and len(inv.line_items) > 0:
+            qty_by_product: Dict[int, int] = {}
             for item in inv.line_items:
-                if item.quantity <= 0:
-                    raise HTTPException(status_code=400, detail=f"Quantity for product ID {item.product_id} must be greater than 0.")
+                qty_by_product[item.product_id] = qty_by_product.get(item.product_id, 0) + item.quantity
 
-                cursor.execute("""
-                SELECT id, name, price, price_num, stock, reorder
-                FROM products
-                WHERE id = ? AND user_id = ?
-                """, (item.product_id, user["id"]))
+            lock_clause = " FOR UPDATE" if is_mysql_mode() else ""
+            locked_products: Dict[int, dict] = {}
+            for pid in sorted(qty_by_product.keys()):
+                cursor.execute(f"""
+                    SELECT id, name, price, price_num, stock, reorder
+                    FROM products
+                    WHERE id = ? AND user_id = ?{lock_clause}
+                """, (pid, user["id"]))
                 prod = cursor.fetchone()
                 if not prod:
-                    raise HTTPException(status_code=400, detail=f"Product with ID {item.product_id} does not exist in your inventory.")
-
-                prod_data = dict(prod)
-                available_stock = prod_data["stock"]
-
-                if item.quantity > available_stock:
                     raise HTTPException(
-                        status_code=400,
-                        detail=f"Insufficient stock for '{prod_data['name']}'. Requested {item.quantity}, but only {available_stock} available."
+                        status_code=404,
+                        detail=f"Product ID {pid} does not exist in your inventory."
                     )
+                prod_data = dict(prod)
+                if qty_by_product[pid] > prod_data["stock"]:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Insufficient stock for '{prod_data['name']}'. Requested {qty_by_product[pid]}, but only {prod_data['stock']} available."
+                    )
+                locked_products[pid] = prod_data
 
+            for item in inv.line_items:
+                prod_data = locked_products[item.product_id]
                 unit_price = item.unit_price if (item.unit_price is not None and item.unit_price > 0) else prod_data["price_num"]
                 if not unit_price:
-                    cleaned_p = str(prod_data["price"]).replace("₹", "").replace(",", "").replace("/mo", "").strip()
+                    cleaned_p = str(prod_data["price"]).replace("₹", "").replace("$", "").replace(",", "").replace("/mo", "").strip()
                     try:
                         unit_price = float(cleaned_p)
                     except ValueError:
                         unit_price = 0.0
-
+                unit_price = float(unit_price)
                 line_total = unit_price * item.quantity
                 subtotal += line_total
                 item_descriptions.append(f"{prod_data['name']} (x{item.quantity})")
@@ -3556,185 +3857,275 @@ def create_invoice(inv: InvoiceCreate, user: dict = Depends(get_authenticated_us
                     "quantity": item.quantity,
                     "unit_price": unit_price,
                     "line_total": line_total,
-                    "current_stock": available_stock,
-                    "reorder": prod_data["reorder"]
                 })
-        else:
-            cleaned_amt = str(inv.amount or "0").replace("₹", "").replace(",", "").strip()
-            try:
-                subtotal = float(cleaned_amt)
-            except ValueError:
-                subtotal = 0.0
-            item_descriptions.append(inv.items or "General Invoice")
 
-        # 3. Calculate Tax, Discount, Grand Total
-        tax_pct = max(0.0, float(inv.tax or 0.0))
+            for pid, total_qty in qty_by_product.items():
+                prod_data = locked_products[pid]
+                new_stock = prod_data["stock"] - total_qty
+                stock_deductions[pid] = {
+                    "qty": total_qty,
+                    "new_stock": new_stock,
+                    "new_status": _compute_stock_status(new_stock, prod_data["reorder"]),
+                    "reorder": prod_data["reorder"],
+                    "name": prod_data["name"],
+                }
+        else:
+            subtotal = manual_subtotal
+            item_descriptions.append((inv.items or "").strip() or "General Invoice")
+
+        # 4. Calculate Tax, Discount, Grand Total
         tax_amount = subtotal * (tax_pct / 100.0) if tax_pct > 0 else 0.0
-        discount_amount = max(0.0, float(inv.discount or 0.0))
         grand_total = max(0.0, subtotal + tax_amount - discount_amount)
 
-        # 4. Generate Tenant-Isolated Invoice ID
-        inv_id = inv.id
-        if not inv_id:
-            cursor.execute("SELECT id FROM invoices WHERE user_id = ?", (user["id"],))
-            existing_ids = [r[0] for r in cursor.fetchall()]
-            max_num = 0
-            prefix_pattern = f"INV-{user['id']}-"
-            for eid in existing_ids:
-                if eid.startswith(prefix_pattern):
-                    try:
-                        num = int(eid.split(prefix_pattern)[1])
-                        if num > max_num:
-                            max_num = num
-                    except (ValueError, IndexError):
-                        pass
-                elif eid.startswith("INV-2026-") and user["id"] == 1:
-                    try:
-                        num = int(eid.split("INV-2026-")[1])
-                        if num > max_num:
-                            max_num = num
-                    except (ValueError, IndexError):
-                        pass
-            inv_id = f"INV-{user['id']}-{max_num + 1:03d}"
+        # 5. Server-Controlled Internal ID & Tenant-Safe Concurrency-Safe Invoice Number
+        # Strictly ignore any untrusted client-supplied inv.id or user_id.
+        inv_id = _generate_server_invoice_id()
+        inv_number = custom_inv_number if custom_inv_number is not None else _allocate_tenant_invoice_number(cursor, user["id"])
 
-        issued_date = inv.issued or datetime.now().strftime("%b %d, %Y")
-        due_date = inv.due or (datetime.now() + timedelta(days=30)).strftime("%b %d, %Y")
+        issued_date = (inv.issued or "").strip() or datetime.now().strftime("%b %d, %Y")
+        due_date = (inv.due or "").strip() or (datetime.now() + timedelta(days=30)).strftime("%b %d, %Y")
         formatted_amount = f"₹{grand_total:,.0f}" if grand_total >= 1 else f"₹{grand_total:.2f}"
         items_summary_text = ", ".join(item_descriptions) if item_descriptions else (inv.items or "")
+        now_utc_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-        # 5. Atomic Transaction: Insert Invoice & Line Items, Reduce Stock, Update Customer
+        # 6. Atomic Transaction: Insert Invoice Header & Line Items, Deduct Stock, Update Customer
         cursor.execute("""
-        INSERT INTO invoices (
-            id, user_id, client, amount, amount_num, due, issued, status,
-            items, subtotal, tax, discount, total
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO invoices (
+                id, user_id, customer_id, invoice_number, idempotency_key,
+                client, amount, amount_num, due, issued, status,
+                items, subtotal, tax, discount, total, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            inv_id, user["id"], clean_client, formatted_amount, grand_total, due_date, issued_date,
-            inv.status or "Pending", items_summary_text, subtotal, tax_pct, discount_amount, grand_total
+            inv_id, user["id"], cust_data["id"], inv_number, clean_idem,
+            clean_client, formatted_amount, grand_total, due_date, issued_date,
+            norm_status, items_summary_text, subtotal, tax_pct, discount_amount, grand_total, now_utc_str
         ))
 
-        # Insert line items & deduct stock atomically
         for p_item in processed_items:
             cursor.execute("""
-            INSERT INTO invoice_items (user_id, invoice_id, product_id, product_name, quantity, unit_price, line_total)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO invoice_items (user_id, invoice_id, product_id, product_name, quantity, unit_price, line_total)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
                 user["id"], inv_id, p_item["product_id"], p_item["product_name"],
                 p_item["quantity"], p_item["unit_price"], p_item["line_total"]
             ))
 
-            new_stock = p_item["current_stock"] - p_item["quantity"]
-            reorder_val = p_item["reorder"]
-
-            if new_stock == 0:
-                new_status = "Out of Stock"
-            elif new_stock <= reorder_val * 0.3:
-                new_status = "Critical"
-            elif new_stock <= reorder_val:
-                new_status = "Low Stock"
-            else:
-                new_status = "In Stock"
-
+        for pid, ded in stock_deductions.items():
             cursor.execute("""
-            UPDATE products SET stock = ?, status = ? WHERE id = ? AND user_id = ?
-            """, (new_stock, new_status, p_item["product_id"], user["id"]))
-
-            if new_stock <= reorder_val:
-                add_notification(
-                    conn, user["id"], "inventory",
-                    f"Low stock: {p_item['product_name']}",
-                    f"Stock reduced to {new_stock} unit(s) after invoice #{inv_id}."
+                UPDATE products
+                SET stock = stock - ?, status = ?
+                WHERE id = ? AND user_id = ? AND stock >= ?
+            """, (ded["qty"], ded["new_status"], pid, user["id"], ded["qty"]))
+            if cursor.rowcount != 1:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Insufficient stock for '{ded['name']}' during concurrent fulfillment."
                 )
 
-        # Update customer orders and spend
+            if ded["new_stock"] <= ded["reorder"]:
+                add_notification(
+                    conn, user["id"], "inventory",
+                    f"Low stock: {ded['name']}",
+                    f"Stock reduced to {ded['new_stock']} unit(s) after invoice #{inv_number}."
+                )
+
         cursor.execute("""
-        UPDATE customers SET
-            orders = orders + 1,
-            total_spend = total_spend + ?,
-            days_since_last_purchase = 0
-        WHERE id = ? AND user_id = ?
+            UPDATE customers SET
+                orders = orders + 1,
+                total_spend = total_spend + ?,
+                days_since_last_purchase = 0
+            WHERE id = ? AND user_id = ?
         """, (grand_total, cust_data["id"], user["id"]))
 
-        # Log business activity
         log_activity(
             conn, user["id"], "DollarSign",
-            f"Created invoice #{inv_id} for {clean_client} — {formatted_amount}",
+            f"Created invoice #{inv_number} for {clean_client} — {formatted_amount}",
             "invoice", "text-emerald-500"
         )
 
         conn.commit()
-
-        cursor.execute("SELECT * FROM invoices WHERE id = ? AND user_id = ?", (inv_id, user["id"]))
-        created_inv = dict(cursor.fetchone())
-        cursor.execute("SELECT * FROM invoice_items WHERE invoice_id = ? AND user_id = ?", (inv_id, user["id"]))
-        created_inv["line_items"] = [dict(r) for r in cursor.fetchall()]
-
-        conn.close()
-        return created_inv
+        return _fetch_invoice_with_items(cursor, inv_id, user["id"])
 
     except HTTPException:
         try:
             conn.rollback()
         except Exception:
             pass
-        conn.close()
         raise
     except sqlite3.IntegrityError as ie:
         try:
             conn.rollback()
         except Exception:
             pass
-        conn.close()
-        logger.error("Database integrity error during invoice creation: %s", ie)
-        raise HTTPException(status_code=400, detail="Database integrity constraint violation.")
+        err_lower = str(ie).lower()
+        # Handle concurrent idempotent replay race cleanly
+        if clean_idem and ("uq_invoices_user_idempotency" in err_lower or "idempotency" in err_lower or "1062" in err_lower or "unique" in err_lower):
+            try:
+                cursor.execute(
+                    "SELECT id FROM invoices WHERE user_id = ? AND idempotency_key = ?",
+                    (user["id"], clean_idem)
+                )
+                existing_idem = cursor.fetchone()
+                if existing_idem:
+                    existing_inv = _fetch_invoice_with_items(cursor, existing_idem[0], user["id"])
+                    if existing_inv:
+                        return existing_inv
+            except Exception:
+                pass
+
+        logger.warning("Invoice integrity conflict for user_id=%s: %s", user["id"], type(ie).__name__)
+        if any(k in err_lower for k in ("1452", "foreign key")):
+            raise HTTPException(status_code=422, detail="Invalid customer or product reference for this invoice.")
+        if any(k in err_lower for k in ("1062", "duplicate", "unique")):
+            raise HTTPException(
+                status_code=409,
+                detail="An invoice with this invoice number already exists for your business."
+            )
+        raise HTTPException(status_code=409, detail="Invoice creation conflicted with an existing record.")
     except Exception as e:
         try:
             conn.rollback()
         except Exception:
             pass
-        conn.close()
-        logger.error("Invoice creation failed: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to create invoice. Please try again.")
+        logger.error("Invoice creation failed for user_id=%s: %s", user["id"], e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create invoice. All changes were safely rolled back.")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@app.put("/api/invoices/{invoice_id}")
+def update_invoice(invoice_id: str, inv_upd: InvoiceUpdate, user: dict = Depends(get_authenticated_user)):
+    """Update mutable metadata on an existing tenant-owned invoice without altering internal ID or ownership."""
+    new_num = _validate_invoice_number(inv_upd.invoice_number) if inv_upd.invoice_number is not None else None
+    new_status = _normalize_invoice_status(inv_upd.status) if inv_upd.status is not None else None
+
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id, invoice_number, due, issued, status FROM invoices WHERE id = ? AND user_id = ?", (invoice_id, user["id"]))
+        existing = cursor.fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+
+        curr = dict(existing)
+        final_num = new_num if new_num is not None else (curr.get("invoice_number") or curr["id"])
+        final_due = (inv_upd.due.strip() if inv_upd.due is not None else curr.get("due") or "")
+        final_issued = (inv_upd.issued.strip() if inv_upd.issued is not None else curr.get("issued") or "")
+        final_status = new_status if new_status is not None else (curr.get("status") or "Pending")
+
+        cursor.execute("""
+            UPDATE invoices
+            SET invoice_number = ?, due = ?, issued = ?, status = ?
+            WHERE id = ? AND user_id = ?
+        """, (final_num, final_due, final_issued, final_status, invoice_id, user["id"]))
+
+        log_activity(conn, user["id"], "FileText", f"Updated invoice #{final_num}", "invoice", "text-indigo-500")
+        conn.commit()
+        return _fetch_invoice_with_items(cursor, invoice_id, user["id"])
+    except HTTPException:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    except sqlite3.IntegrityError:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise HTTPException(status_code=409, detail="An invoice with this invoice number already exists for your business.")
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.error("Failed to update invoice %s: %s", invoice_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update invoice.")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.patch("/api/invoices/{invoice_id}/status")
 def update_invoice_status(invoice_id: str, status_data: InvoiceStatusUpdate, user: dict = Depends(get_authenticated_user)):
+    norm_status = _normalize_invoice_status(status_data.status)
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, client, amount FROM invoices WHERE id = ? AND user_id = ?", (invoice_id, user["id"]))
-    existing = cursor.fetchone()
-    if not existing:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Invoice not found")
+    try:
+        cursor.execute("SELECT id, invoice_number, client, amount FROM invoices WHERE id = ? AND user_id = ?", (invoice_id, user["id"]))
+        existing = cursor.fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Invoice not found")
 
-    cursor.execute("UPDATE invoices SET status = ? WHERE id = ? AND user_id = ?", (status_data.status, invoice_id, user["id"]))
-    log_activity(conn, user["id"], "FileText", f"Invoice #{invoice_id} status updated to {status_data.status}", "invoice", "text-indigo-500")
-    conn.commit()
+        curr = dict(existing)
+        display_num = curr.get("invoice_number") or curr["id"]
 
-    cursor.execute("SELECT * FROM invoices WHERE id = ? AND user_id = ?", (invoice_id, user["id"]))
-    inv_data = dict(cursor.fetchone())
-    cursor.execute("SELECT * FROM invoice_items WHERE invoice_id = ? AND user_id = ?", (invoice_id, user["id"]))
-    inv_data["line_items"] = [dict(item) for item in cursor.fetchall()]
-    conn.close()
-    return inv_data
+        cursor.execute("UPDATE invoices SET status = ? WHERE id = ? AND user_id = ?", (norm_status, invoice_id, user["id"]))
+        log_activity(conn, user["id"], "FileText", f"Invoice #{display_num} status updated to {norm_status}", "invoice", "text-indigo-500")
+        conn.commit()
+
+        return _fetch_invoice_with_items(cursor, invoice_id, user["id"])
+    except HTTPException:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.error("Failed to update invoice status %s: %s", invoice_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update invoice status.")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.delete("/api/invoices/{invoice_id}")
 def delete_invoice(invoice_id: str, user: dict = Depends(get_authenticated_user)):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT id FROM invoices WHERE id = ? AND user_id = ?", (invoice_id, user["id"]))
-    if not cursor.fetchone():
-        conn.close()
-        raise HTTPException(status_code=404, detail="Invoice not found")
+    try:
+        cursor.execute("SELECT id, invoice_number FROM invoices WHERE id = ? AND user_id = ?", (invoice_id, user["id"]))
+        existing = cursor.fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Invoice not found")
 
-    cursor.execute("DELETE FROM invoice_items WHERE invoice_id = ? AND user_id = ?", (invoice_id, user["id"]))
-    cursor.execute("DELETE FROM invoices WHERE id = ? AND user_id = ?", (invoice_id, user["id"]))
-    log_activity(conn, user["id"], "Trash2", f"Deleted invoice #{invoice_id}", "invoice", "text-rose-500")
-    conn.commit()
-    conn.close()
-    return {"status": "success", "deleted_id": invoice_id}
+        display_num = dict(existing).get("invoice_number") or invoice_id
+        cursor.execute("DELETE FROM invoice_items WHERE invoice_id = ? AND user_id = ?", (invoice_id, user["id"]))
+        cursor.execute("DELETE FROM invoices WHERE id = ? AND user_id = ?", (invoice_id, user["id"]))
+        # Sequence counter in invoice_sequences is intentionally NOT decremented so deleted numbers are never reused.
+        log_activity(conn, user["id"], "Trash2", f"Deleted invoice #{display_num}", "invoice", "text-rose-500")
+        conn.commit()
+        return {"status": "success", "deleted_id": invoice_id}
+    except HTTPException:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.error("Failed to delete invoice %s: %s", invoice_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete invoice.")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 # ============================================================

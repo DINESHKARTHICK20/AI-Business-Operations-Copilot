@@ -166,6 +166,9 @@ class Invoice(Base):
     __tablename__ = "invoices"
     __table_args__ = (
         UniqueConstraint("id", "user_id", name="uq_invoices_id_user"),
+        UniqueConstraint("user_id", "invoice_number", name="uq_invoices_user_number"),
+        UniqueConstraint("user_id", "idempotency_key", name="uq_invoices_user_idempotency"),
+        Index("idx_invoices_user_number", "user_id", "invoice_number"),
         ForeignKeyConstraint(
             ["customer_id", "user_id"],
             ["customers.id", "customers.user_id"],
@@ -180,6 +183,8 @@ class Invoice(Base):
     # ON DELETE RESTRICT guarantees invoices cannot be deleted via cascading user/customer deletes
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     customer_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
+    invoice_number: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     client: Mapped[str] = mapped_column(String(255), nullable=False)
     amount: Mapped[str] = mapped_column(String(50), default="$0.00", server_default="$0.00")
     amount_num: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default=text("0.00"))
@@ -191,6 +196,7 @@ class Invoice(Base):
     tax: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default=text("0.00"))
     discount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default=text("0.00"))
     total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), server_default=text("0.00"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     user: Mapped["User"] = relationship("User", back_populates="invoices")
     customer: Mapped[Optional["Customer"]] = relationship(
@@ -252,6 +258,24 @@ class InvoiceItem(Base):
         back_populates="invoice_items",
         foreign_keys=[product_id, user_id],
         primaryjoin="and_(InvoiceItem.product_id == Product.id, InvoiceItem.user_id == Product.user_id)"
+    )
+
+
+# ============================================================
+# 6B. INVOICE SEQUENCES (SEC-13 ATOMIC PER-TENANT NUMBERING)
+# ============================================================
+class InvoiceSequence(Base):
+    __tablename__ = "invoice_sequences"
+    __table_args__ = (MYSQL_TABLE_ARGS,)
+
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("users.id", name="fk_invoice_sequences_user", ondelete="CASCADE"),
+        primary_key=True
+    )
+    last_number: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 

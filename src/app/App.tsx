@@ -647,7 +647,7 @@ function TopBar({ page, setPage, user, onToggleSidebar }: { page: Page; setPage:
                         className="px-2.5 py-2 hover:bg-emerald-50/50 rounded-xl cursor-pointer flex items-center justify-between transition-colors group"
                       >
                         <div className="min-w-0 pr-2">
-                          <p className="text-xs font-semibold text-slate-800 truncate group-hover:text-emerald-600">{inv.id}</p>
+                          <p className="text-xs font-semibold text-slate-800 truncate group-hover:text-emerald-600">{inv.invoice_number || inv.id}</p>
                           <p className="text-[11px] text-slate-500 truncate">Client: {inv.client} • Due: {inv.due || "N/A"}</p>
                         </div>
                         <div className="text-right shrink-0">
@@ -4015,7 +4015,8 @@ async function downloadInvoicePDF(inv: Invoice, companyName = "AI Business Opera
     if (!blob || blob.size === 0) {
       throw new Error("Empty document received from server.");
     }
-    const cleanId = (inv.id || "INVOICE").replace(/[^a-zA-Z0-9_\-]/g, "_");
+    const displayNum = inv.invoice_number || inv.id || "INVOICE";
+    const cleanId = displayNum.replace(/[^a-zA-Z0-9_\-]/g, "_");
     const filename = `Invoice_${cleanId}.pdf`;
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -4041,13 +4042,21 @@ function InvoicesPage() {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const isSubmittingRef = useRef(false);
 
   // Form State for New Invoice
   const [client, setClient] = useState("");
+  const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [idempotencyKey, setIdempotencyKey] = useState("");
   const [due, setDue] = useState("Sep 30, 2026");
   const [status, setStatus] = useState<"Paid" | "Pending" | "Overdue" | "Draft">("Pending");
   const [taxRate, setTaxRate] = useState(18); // Default 18% GST
   const [discount, setDiscount] = useState(0);
+
+  const newSubmissionKey = () =>
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `idem_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
   // Multi-Product Line Items
   const [lineItems, setLineItems] = useState<Array<{ product_id: number; product_name: string; quantity: number; unit_price: number }>>([]);
@@ -4079,6 +4088,8 @@ function InvoicesPage() {
     setSuccessMessage(null);
     const defaultCust = customersList[0]?.company || customersList[0]?.name || "";
     setClient(defaultCust);
+    setInvoiceNumber("");
+    setIdempotencyKey(newSubmissionKey());
 
     const defaultProd = productsList.find(p => p.stock > 0) || productsList[0];
     if (defaultProd) {
@@ -4150,6 +4161,7 @@ function InvoicesPage() {
 
   const handleCreateInvoice = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingRef.current || loading) return;
     setErrorMessage(null);
 
     if (!client) {
@@ -4175,10 +4187,14 @@ function InvoicesPage() {
       }
     }
 
+    isSubmittingRef.current = true;
     setLoading(true);
     try {
+      const submissionKey = idempotencyKey || newSubmissionKey();
       const newInv = await api.createInvoice({
         client,
+        invoice_number: invoiceNumber.trim() || undefined,
+        idempotency_key: submissionKey,
         due,
         status,
         tax: taxRate,
@@ -4192,7 +4208,9 @@ function InvoicesPage() {
       });
 
       setIsModalOpen(false);
-      setSuccessMessage(`Invoice ${newInv.id} created successfully! Inventory stock has been automatically updated.`);
+      setInvoiceNumber("");
+      setIdempotencyKey("");
+      setSuccessMessage(`Invoice ${newInv.invoice_number || newInv.id} created successfully! Inventory stock has been automatically updated.`);
       fetchInvoices();
       fetchDependencies();
       setPreview(newInv);
@@ -4200,17 +4218,19 @@ function InvoicesPage() {
       console.error("Create invoice error:", err);
       setErrorMessage(err.message || "Failed to create invoice. Transaction rolled back.");
     } finally {
+      isSubmittingRef.current = false;
       setLoading(false);
     }
   };
 
   const handleAIGenerate = async () => {
+    if (isSubmittingRef.current || loading) return;
     setErrorMessage(null);
+    isSubmittingRef.current = true;
     setLoading(true);
     try {
       if (!customersList || customersList.length === 0) {
         setErrorMessage("Cannot AI-generate invoice: Please register at least one customer first.");
-        setLoading(false);
         return;
       }
       const firstCustomer = customersList[0]?.company || customersList[0]?.name || "Client Account";
@@ -4218,12 +4238,12 @@ function InvoicesPage() {
 
       if (!availableProd || availableProd.stock < 1) {
         setErrorMessage("Cannot AI-generate invoice: No in-stock products available in inventory.");
-        setLoading(false);
         return;
       }
 
       const generated = await api.createInvoice({
         client: firstCustomer,
+        idempotency_key: newSubmissionKey(),
         due: "Sep 30, 2026",
         status: "Draft",
         tax: 18,
@@ -4239,12 +4259,13 @@ function InvoicesPage() {
       fetchInvoices();
       fetchDependencies();
       setPreview(generated);
-      setSuccessMessage(`AI Generated draft invoice ${generated.id} for ${firstCustomer} with 1 unit of ${availableProd.name}! Stock deducted.`);
+      setSuccessMessage(`AI Generated draft invoice ${generated.invoice_number || generated.id} for ${firstCustomer} with 1 unit of ${availableProd.name}! Stock deducted.`);
       setTimeout(() => setSuccessMessage(null), 5000);
     } catch (err: any) {
       console.error("AI Invoice Generation Error:", err);
       setErrorMessage(`AI Invoice Generation failed: ${err.message}`);
     } finally {
+      isSubmittingRef.current = false;
       setLoading(false);
     }
   };
@@ -4259,13 +4280,14 @@ function InvoicesPage() {
     }
   };
 
-  const handleDeleteInvoice = async (id: string, e?: React.MouseEvent) => {
+  const handleDeleteInvoice = async (inv: Invoice, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (!window.confirm(`Are you sure you want to delete invoice ${id}?`)) return;
+    const displayNum = inv.invoice_number || inv.id;
+    if (!window.confirm(`Are you sure you want to delete invoice ${displayNum}?`)) return;
     try {
-      await api.deleteInvoice(id);
+      await api.deleteInvoice(inv.id);
       fetchInvoices();
-      if (preview?.id === id) setPreview(null);
+      if (preview?.id === inv.id) setPreview(null);
     } catch (err) {
       console.error("Delete invoice error:", err);
     }
@@ -4277,6 +4299,7 @@ function InvoicesPage() {
   const filtered = invoicesList.filter(inv =>
     inv.client.toLowerCase().includes(search.toLowerCase()) ||
     inv.id.toLowerCase().includes(search.toLowerCase()) ||
+    (inv.invoice_number || "").toLowerCase().includes(search.toLowerCase()) ||
     inv.status.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -4284,8 +4307,8 @@ function InvoicesPage() {
   const paginatedInvoices = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const handleExportInvoicesCSV = () => {
-    const headers = ["Invoice ID", "Client", "Amount", "Issued Date", "Due Date", "Status", "Items"];
-    const rows = filtered.map(i => [i.id, `"${i.client}"`, `"${i.amount}"`, i.issued, i.due, i.status, `"${i.items || ''}"`]);
+    const headers = ["Invoice Number", "Client", "Amount", "Issued Date", "Due Date", "Status", "Items"];
+    const rows = filtered.map(i => [i.invoice_number || i.id, `"${i.client}"`, `"${i.amount}"`, i.issued, i.due, i.status, `"${i.items || ''}"`]);
     const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -4298,12 +4321,6 @@ function InvoicesPage() {
 
   return (
     <div className="space-y-5">
-      {successMessage && (
-        <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl text-xs flex items-center gap-2">
-          <CheckCircle size={14} className="shrink-0" />
-          <span>{successMessage}</span>
-        </div>
-      )}
       <ErrorBanner message={errorMessage} onRetry={fetchInvoices} />
       {/* Global Success Banner */}
       {successMessage && (
@@ -4338,7 +4355,7 @@ function InvoicesPage() {
             <SearchBar value={search} onChange={(val) => { setSearch(val); setCurrentPage(1); }} placeholder="Search invoices..." />
             <button onClick={handleExportInvoicesCSV} className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50"><Download size={13} />Export CSV</button>
             <button className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50"><Filter size={13} />Filter</button>
-            <GradientButton size="sm" onClick={handleAIGenerate}><Sparkles size={13} />AI Generate</GradientButton>
+            <GradientButton size="sm" onClick={handleAIGenerate} disabled={loading}><Sparkles size={13} />AI Generate</GradientButton>
             <GradientButton size="sm" variant="secondary" onClick={openCreateModal}><Plus size={13} />New Invoice</GradientButton>
           </div>
           <div className="overflow-x-auto">
@@ -4354,7 +4371,7 @@ function InvoicesPage() {
                 {filtered.length > 0 ? (
                   paginatedInvoices.map(inv => (
                     <tr key={inv.id} className="hover:bg-slate-50 cursor-pointer transition-colors" onClick={() => setPreview(preview?.id === inv.id ? null : inv)}>
-                      <td className="px-5 py-3.5 text-sm font-mono font-medium text-indigo-600">{inv.id}</td>
+                      <td className="px-5 py-3.5 text-sm font-mono font-medium text-indigo-600">{inv.invoice_number || inv.id}</td>
                       <td className="px-5 py-3.5 text-sm text-slate-700">{inv.client}</td>
                       <td className="px-5 py-3.5 text-sm font-bold text-slate-800">{inv.amount}</td>
                       <td className="px-5 py-3.5 text-sm text-slate-500">{inv.issued}</td>
@@ -4364,7 +4381,7 @@ function InvoicesPage() {
                         <div className="flex items-center gap-1">
                           <button onClick={(e) => { e.stopPropagation(); setPreview(inv); }} className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600" title="View"><Eye size={13} /></button>
                           <button onClick={(e) => { e.stopPropagation(); downloadInvoicePDF(inv); }} className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600" title="Download PDF"><Download size={13} /></button>
-                          <button onClick={(e) => handleDeleteInvoice(inv.id, e)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500" title="Delete"><Trash2 size={13} /></button>
+                          <button onClick={(e) => handleDeleteInvoice(inv, e)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500" title="Delete"><Trash2 size={13} /></button>
                         </div>
                       </td>
                     </tr>
@@ -4443,7 +4460,7 @@ function InvoicesPage() {
                   </div>
                   <StatusBadge status={preview.status} />
                 </div>
-                <p className="font-mono text-xs opacity-80">{preview.id}</p>
+                <p className="font-mono text-xs opacity-80">{preview.invoice_number || preview.id}</p>
                 <p className="text-2xl font-extrabold mt-1">{preview.amount}</p>
               </div>
 
@@ -4519,7 +4536,7 @@ function InvoicesPage() {
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <button onClick={() => downloadInvoicePDF(preview)} className="flex items-center justify-center gap-1.5 text-xs py-2.5 bg-indigo-50 text-indigo-700 rounded-xl font-medium hover:bg-indigo-100"><Download size={12} />Download PDF</button>
-                <button onClick={() => { window.location.href = `mailto:?subject=Invoice ${preview.id}&body=Dear ${preview.client},%0D%0A%0D%0APlease find details for invoice ${preview.id} in amount of ${preview.amount}. Due: ${preview.due}`; }} className="flex items-center justify-center gap-1.5 text-xs py-2.5 bg-violet-50 text-violet-700 rounded-xl font-medium hover:bg-violet-100"><Mail size={12} />Send Email</button>
+                <button onClick={() => { const dispNum = preview.invoice_number || preview.id; window.location.href = `mailto:?subject=Invoice ${dispNum}&body=Dear ${preview.client},%0D%0A%0D%0APlease find details for invoice ${dispNum} in amount of ${preview.amount}. Due: ${preview.due}`; }} className="flex items-center justify-center gap-1.5 text-xs py-2.5 bg-violet-50 text-violet-700 rounded-xl font-medium hover:bg-violet-100"><Mail size={12} />Send Email</button>
               </div>
             </div>
           </div>
@@ -4578,14 +4595,28 @@ function InvoicesPage() {
                 </div>
               </div>
 
-              <div>
-                <label className="block font-medium text-slate-700 mb-1">Due Date</label>
-                <input
-                  value={due}
-                  onChange={e => setDue(e.target.value)}
-                  placeholder="e.g. Sep 30, 2026"
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">Invoice # (Optional)</label>
+                  <input
+                    value={invoiceNumber}
+                    onChange={e => {
+                      setInvoiceNumber(e.target.value);
+                      setIdempotencyKey(newSubmissionKey());
+                    }}
+                    placeholder="Auto-generated if blank"
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">Due Date</label>
+                  <input
+                    value={due}
+                    onChange={e => setDue(e.target.value)}
+                    placeholder="e.g. Sep 30, 2026"
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none"
+                  />
+                </div>
               </div>
 
               {/* Line Items Section */}
